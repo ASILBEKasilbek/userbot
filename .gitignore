@@ -1,0 +1,60 @@
+# Python build va cache fayllari
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.pdb
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+groups.json
+# Virtual environment
+venv/
+env/
+ENV/
+.venv/
+
+# OS (operatsion tizim) fayllari
+.DS_Store
+Thumbs.db
+
+# IDE va editor fayllari
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Log fayllar
+*.log
+logs/
+log.txt
+
+# Ma'lumotlar bazasi fayllari
+*.sqlite3
+*.db
+
+# Config va maxfiy fayllar
+.env
+config.json
+settings.json
+
+# __main__.py ni lokal test uchun ishlatilsa, lekin yuklamaslik kerak bo'lsa
+test_*.py
+local_*.py
+
+# Telegram va boshqa API credential fayllari
+api_keys.txt
+credentials.json
+
+# Cache va vaqtinchalik fayllar
+tmp/
+temp/
+*.bak
+*.swp
+*.swo
+
+# PyInstaller output
+dist/
+build/
