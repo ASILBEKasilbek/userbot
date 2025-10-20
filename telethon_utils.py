@@ -79,6 +79,7 @@ async def load_existing_groups(client: TelegramClient, profile_id: int):
         logger.error(f"{client._self_id} mavjud guruhlarni yuklashda xato: {e}")
 import asyncio
 import logging
+import random
 from telethon.errors import (
     ChatWriteForbiddenError,
     ChannelPrivateError,
@@ -92,7 +93,11 @@ from telethon_utils import handle_linked_channel, leave_group
 
 logger = logging.getLogger(__name__)
 
-MAX_CONCURRENT_SENDS = 5  # bir vaqtning o‘zida 5 ta guruhga yuboradi (o‘zgartirsa bo‘ladi)
+# --- CONFIGURATSIYA ---
+MAX_CONCURRENT_SENDS = 3   # Bir vaqtning o‘zida 3 tadan ko‘p yubormasin (5 juda tez)
+BASE_DELAY = 2.5           # Har yuborishdan keyin o‘rtacha 2.5s kutish
+FLOOD_BACKOFF = True       # FloodWait aniqlansa avtomatik sekinlashish rejimi
+
 
 async def try_join_linked_channel(client, entity, profile_id: int) -> bool:
     """Agar yozish uchun kanalga obuna bo‘lish kerak bo‘lsa, avtomatik qo‘shiladi."""
@@ -114,17 +119,17 @@ async def try_join_linked_channel(client, entity, profile_id: int) -> bool:
 
 
 async def send_message_safe(client, link, message_text, profile_id, idx, total_groups):
-    """Bitta guruhga xavfsiz xabar yuborish (xatolardan himoyalangan)."""
+    """Bitta guruhga xavfsiz va barqaror xabar yuborish."""
     entity = None
     try:
         entity = await client.get_entity(link)
         msg = await client.send_message(entity, message_text)
         logger.info(f"✅ [{idx}/{total_groups}] Xabar yuborildi: {link} (msg_id={msg.id})")
         return True
+
     except ChatWriteForbiddenError:
         logger.warning(f"⚠️ [{idx}/{total_groups}] {link} yozish taqiqlangan — kanalga a’zo bo‘lish kerak.")
-        joined = await try_join_linked_channel(client, entity, profile_id)
-        if joined:
+        if await try_join_linked_channel(client, entity, profile_id):
             try:
                 msg = await client.send_message(entity, message_text)
                 logger.info(f"🔁 {link} — kanalga a’zo bo‘lgach yuborildi (msg_id={msg.id})")
@@ -133,22 +138,31 @@ async def send_message_safe(client, link, message_text, profile_id, idx, total_g
                 logger.error(f"❌ {link} qayta yuborishda xato: {e}")
         else:
             await leave_group(client, entity.id, profile_id, link)
+
     except (ChannelPrivateError, UserBannedInChannelError):
         if entity:
             await leave_group(client, entity.id, profile_id, link)
         logger.warning(f"🚫 {link} — maxfiy yoki ban holati.")
+
     except FloodWaitError as e:
         logger.warning(f"⏳ FloodWait {e.seconds}s: {link}")
-        await asyncio.sleep(e.seconds)
+        if FLOOD_BACKOFF:
+            sleep_time = min(e.seconds, 3600)  # 1 soatdan oshsa kutmaydi
+            logger.warning(f"😴 Flood rejimi yoqildi ({sleep_time}s kutish)")
+            await asyncio.sleep(sleep_time)
+        else:
+            await asyncio.sleep(10)
+
     except Exception as e:
         logger.error(f"❌ {link} - umumiy xato: {e}")
         if entity:
             await leave_group(client, entity.id, profile_id, link)
+
     return False
 
 
 async def send_to_groups_auto(clients: list):
-    """Avtomatik xabar yuborish — parallel va tez ishlaydigan versiya."""
+    """Avtomatik xabar yuborish — optimallashtirilgan, flooddan himoyalangan."""
     while True:
         for client in clients:
             profile_id = client.profile_id
@@ -158,7 +172,7 @@ async def send_to_groups_auto(clients: list):
                 continue
 
             message_text = get_profile_setting(profile_id, "message_text") or "📢 Avtomatik xabar!"
-            send_interval = int(get_profile_setting(profile_id, "send_interval") or 60)
+            send_interval = int(get_profile_setting(profile_id, "send_interval") or 120)
             groups = load_groups(profile_id)
 
             if not groups:
@@ -169,8 +183,7 @@ async def send_to_groups_auto(clients: list):
             logger.info(f"🚀 {client._self_id} uchun yuborish boshlandi ({total_groups} ta guruh).")
 
             sem = asyncio.Semaphore(MAX_CONCURRENT_SENDS)
-            success_count = 0
-            fail_count = 0
+            success_count, fail_count = 0, 0
 
             async def bounded_send(idx, link):
                 nonlocal success_count, fail_count
@@ -180,7 +193,9 @@ async def send_to_groups_auto(clients: list):
                         success_count += 1
                     else:
                         fail_count += 1
-                    await asyncio.sleep(1.5)  # har biri orasida kichik pauza (flood xavfini kamaytiradi)
+
+                    delay = BASE_DELAY + random.uniform(0.5, 1.5)
+                    await asyncio.sleep(delay)
 
             tasks = [bounded_send(i + 1, link) for i, link in enumerate(groups)]
             await asyncio.gather(*tasks)
@@ -188,4 +203,4 @@ async def send_to_groups_auto(clients: list):
             logger.info(f"📊 {client._self_id} natija: ✅ {success_count}, ❌ {fail_count}")
             await asyncio.sleep(send_interval)
 
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
