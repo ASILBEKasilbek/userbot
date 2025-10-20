@@ -94,8 +94,8 @@ from telethon_utils import handle_linked_channel, leave_group
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURATSIYA ---
-MAX_CONCURRENT_SENDS = 2   # Bir vaqtning o‘zida 3 tadan ko‘p yubormasin (5 juda tez)
-BASE_DELAY = 3.5           # Har yuborishdan keyin o‘rtacha 2.5s kutish
+BASE_DELAY = 8.0        # har xabar orasida kamida 8 soniya
+MAX_CONCURRENT_SENDS = 1        # Har yuborishdan keyin o‘rtacha 8s kutish
 FLOOD_BACKOFF = True       # FloodWait aniqlansa avtomatik sekinlashish rejimi
 
 
