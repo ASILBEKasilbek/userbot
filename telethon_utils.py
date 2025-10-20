@@ -80,15 +80,23 @@ async def load_existing_groups(client: TelegramClient, profile_id: int):
         logger.error(f"{client._self_id} mavjud guruhlarni yuklashda xato: {e}")
 import asyncio
 from telethon.errors import ChatWriteForbiddenError, ChannelPrivateError, UserBannedInChannelError, FloodWaitError
+import asyncio
+import logging
+from telethon.errors import ChatWriteForbiddenError, ChannelPrivateError, UserBannedInChannelError, FloodWaitError
+from db import load_groups, get_profile_setting
+from telethon_utils import handle_linked_channel, leave_group
+
+logger = logging.getLogger(__name__)
 
 async def send_to_groups_auto(clients: list):
-    """Avtomatik ravishda guruhlarga xabar yuborish (real-time natija bilan)."""
+    """Avtomatik ravishda guruhlarga xabar yuborish (logger bilan, real-time natija)."""
+    
     while True:
         for client in clients:
             profile_id = client.profile_id
             auto_send_enabled = bool(int(get_profile_setting(profile_id, "auto_send_enabled") or 0))
             if not auto_send_enabled:
-                print(f"🚫 Profil {client._self_id} uchun auto_send o‘chirilgan.")
+                logger.info(f"🚫 Profil {client._self_id} uchun auto_send o‘chirilgan.")
                 continue
 
             message_text = get_profile_setting(profile_id, "message_text") or "📢 Bu avtomatik xabar!"
@@ -97,50 +105,54 @@ async def send_to_groups_auto(clients: list):
             groups = load_groups(profile_id)
 
             if not groups:
-                print(f"⚠️ {client._self_id} uchun guruhlar topilmadi.")
+                logger.warning(f"⚠️ {client._self_id} uchun guruhlar topilmadi.")
                 continue
 
-            print(f"\n🚀 {client._self_id} uchun avtomatik yuborish boshlandi ({len(groups)} ta guruh)...")
+            total_groups = len(groups)
+            logger.info(f"🚀 {client._self_id} uchun avtomatik yuborish boshlandi ({total_groups} ta guruh).")
 
             success_count = 0
             fail_count = 0
-            total_groups = len(groups)
 
             for idx, link in enumerate(groups.copy(), start=1):
                 try:
                     entity = await client.get_entity(link)
-                    await client.send_message(entity, message_text)
-                    print(f"✅ [{idx}/{total_groups}] {link} ga yuborildi")
+                    msg = await client.send_message(entity, message_text)
+                    logger.info(f"✅ [{idx}/{total_groups}] Xabar yuborildi: {link} (msg_id={msg.id})")
                     success_count += 1
+
                 except ChatWriteForbiddenError:
-                    print(f"⚠️ [{idx}/{total_groups}] {link} yozish taqiqlangan — tekshirilmoqda...")
+                    logger.warning(f"⚠️ [{idx}/{total_groups}] {link} yozish taqiqlangan — bog‘langan kanal tekshirilmoqda...")
                     if await handle_linked_channel(client, entity, profile_id):
                         try:
-                            await client.send_message(entity, message_text)
-                            print(f"🔁 {link} qayta yuborildi")
+                            msg = await client.send_message(entity, message_text)
+                            logger.info(f"🔁 {link} qayta yuborildi (msg_id={msg.id})")
                             success_count += 1
                         except Exception as e:
-                            print(f"❌ {link} qayta yuborishda xato: {e}")
+                            logger.error(f"❌ {link} qayta yuborishda xato: {e}")
                             fail_count += 1
                     else:
                         await leave_group(client, entity.id, profile_id, link)
                         fail_count += 1
+
                 except (ChannelPrivateError, UserBannedInChannelError):
-                    print(f"🚫 [{idx}/{total_groups}] {link} — Maxfiy yoki ban")
+                    logger.warning(f"🚫 [{idx}/{total_groups}] {link} — Maxfiy kanal yoki ban.")
                     await leave_group(client, entity.id, profile_id, link)
                     fail_count += 1
+
                 except FloodWaitError as e:
-                    print(f"⏳ [{idx}/{total_groups}] FloodWait: {e.seconds}s kutish...")
+                    logger.warning(f"⏳ [{idx}/{total_groups}] FloodWait: {e.seconds}s kutish...")
                     await asyncio.sleep(e.seconds)
                     fail_count += 1
+
                 except Exception as e:
-                    print(f"❌ [{idx}/{total_groups}] {link} - xato: {e}")
+                    logger.error(f"❌ [{idx}/{total_groups}] {link} - xato: {e}")
                     await leave_group(client, entity.id, profile_id, link)
                     fail_count += 1
 
                 await asyncio.sleep(60 / messages_per_minute)
 
-            print(f"\n📊 {client._self_id} uchun natija: {success_count} ta yuborildi, {fail_count} ta muvaffaqiyatsiz.\n")
+            logger.info(f"📊 {client._self_id} uchun natija: {success_count} ta yuborildi, {fail_count} ta muvaffaqiyatsiz.")
             await asyncio.sleep(send_interval)
 
         await asyncio.sleep(60)
