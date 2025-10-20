@@ -79,10 +79,13 @@ async def load_existing_groups(client: TelegramClient, profile_id: int):
     except Exception as e:
         logger.error(f"{client._self_id} mavjud guruhlarni yuklashda xato: {e}")
 import asyncio
-from telethon.errors import ChatWriteForbiddenError, ChannelPrivateError, UserBannedInChannelError, FloodWaitError
-import asyncio
 import logging
-from telethon.errors import ChatWriteForbiddenError, ChannelPrivateError, UserBannedInChannelError, FloodWaitError
+from telethon.errors import (
+    ChatWriteForbiddenError,
+    ChannelPrivateError,
+    UserBannedInChannelError,
+    FloodWaitError,
+)
 from db import load_groups, get_profile_setting
 from telethon_utils import handle_linked_channel, leave_group
 
@@ -95,6 +98,7 @@ async def send_to_groups_auto(clients: list):
         for client in clients:
             profile_id = client.profile_id
             auto_send_enabled = bool(int(get_profile_setting(profile_id, "auto_send_enabled") or 0))
+            
             if not auto_send_enabled:
                 logger.info(f"🚫 Profil {client._self_id} uchun auto_send o‘chirilgan.")
                 continue
@@ -115,6 +119,8 @@ async def send_to_groups_auto(clients: list):
             fail_count = 0
 
             for idx, link in enumerate(groups.copy(), start=1):
+                entity = None  # har doim aniqlanadi, keyinchalik xato bo‘lmasligi uchun
+
                 try:
                     entity = await client.get_entity(link)
                     msg = await client.send_message(entity, message_text)
@@ -123,7 +129,7 @@ async def send_to_groups_auto(clients: list):
 
                 except ChatWriteForbiddenError:
                     logger.warning(f"⚠️ [{idx}/{total_groups}] {link} yozish taqiqlangan — bog‘langan kanal tekshirilmoqda...")
-                    if await handle_linked_channel(client, entity, profile_id):
+                    if entity and await handle_linked_channel(client, entity, profile_id):
                         try:
                             msg = await client.send_message(entity, message_text)
                             logger.info(f"🔁 {link} qayta yuborildi (msg_id={msg.id})")
@@ -131,13 +137,19 @@ async def send_to_groups_auto(clients: list):
                         except Exception as e:
                             logger.error(f"❌ {link} qayta yuborishda xato: {e}")
                             fail_count += 1
-                    else:
+                    elif entity:
                         await leave_group(client, entity.id, profile_id, link)
+                        fail_count += 1
+                    else:
+                        logger.warning(f"❗ {link} uchun entity aniqlanmagan, tashlab o‘tilmoqda.")
                         fail_count += 1
 
                 except (ChannelPrivateError, UserBannedInChannelError):
-                    logger.warning(f"🚫 [{idx}/{total_groups}] {link} — Maxfiy kanal yoki ban.")
-                    await leave_group(client, entity.id, profile_id, link)
+                    if entity:
+                        logger.warning(f"🚫 [{idx}/{total_groups}] {link} — Maxfiy kanal yoki ban.")
+                        await leave_group(client, entity.id, profile_id, link)
+                    else:
+                        logger.warning(f"🚫 [{idx}/{total_groups}] {link} — Maxfiy yoki mavjud emas (entity yo‘q).")
                     fail_count += 1
 
                 except FloodWaitError as e:
@@ -146,8 +158,11 @@ async def send_to_groups_auto(clients: list):
                     fail_count += 1
 
                 except Exception as e:
-                    logger.error(f"❌ [{idx}/{total_groups}] {link} - xato: {e}")
-                    await leave_group(client, entity.id, profile_id, link)
+                    logger.error(f"❌ [{idx}/{total_groups}] {link} - umumiy xato: {e}")
+                    if entity:
+                        await leave_group(client, entity.id, profile_id, link)
+                    else:
+                        logger.warning(f"❗ {link} uchun entity yo‘q, leave_group o‘tkazib yuborildi.")
                     fail_count += 1
 
                 await asyncio.sleep(60 / messages_per_minute)
