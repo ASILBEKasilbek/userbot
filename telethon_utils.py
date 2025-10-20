@@ -135,31 +135,28 @@ from db import load_groups, get_profile_setting
 
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 30
-DELAY_BETWEEN_MSG = (2, 4)
-PAUSE_BETWEEN_BATCH = 60
-GLOBAL_SLEEP = 300  # barcha profillar uchun aylanib bo‘lgach 5 daqiqa dam
-
+# BATCH_SIZE = 30
+# DELAY_BETWEEN_MSG = (2, 4)
+# PAUSE_BETWEEN_BATCH = 60
+# GLOBAL_SLEEP = 300  # barcha profillar uchun aylanib bo‘lgach 5 daqiqa dam
+BATCH_SIZE = 10
+DELAY_BETWEEN_MSG = (5, 10)
+PAUSE_BETWEEN_BATCH = 120
+GLOBAL_SLEEP = 300
 
 async def send_message_safe(client, link, message_text, profile_id, idx, total_groups):
-    """Bitta guruhga xavfsiz xabar yuborish."""
     try:
         entity = await client.get_entity(link)
         await client.send_message(entity, message_text)
         logger.info(f"✅ [{idx}/{total_groups}] Yuborildi: {link}")
         return True
-
-    except ChatWriteForbiddenError:
-        logger.warning(f"⚠️ [{idx}] Yozish taqiqlangan: {link}")
-    except (ChannelPrivateError, UserBannedInChannelError):
-        logger.warning(f"🚫 [{idx}] Maxfiy yoki ban: {link}")
     except FloodWaitError as e:
-        wait_time = min(e.seconds, 3600)
-        logger.warning(f"⏳ FloodWait {wait_time}s: {link}")
-        await asyncio.sleep(wait_time)
+        logger.warning(f"⏳ FloodWait {e.seconds}s: {link}")
+        await asyncio.sleep(e.seconds)
     except Exception as e:
         logger.error(f"❌ [{idx}] {link} - Xato: {e}")
     return False
+
 
 
 async def send_to_groups_auto(clients: list):
