@@ -1,0 +1,1045 @@
+Foydalanuvchi so‘roviga ko‘ra, botni xatosiz ishlashi va har bir profil uchun alohida sozlamalar bilan tushunarli, sodda interfeys bilan yangilash kerak. Quyidagi talablar aniqlandi:
+
+1. **Asosiy menyuda**:
+   - “➕ Profil qo‘shish”
+   - “📋 Profillar ro‘yxati”
+2. **Profil menyusida (har bir profil uchun)**:
+   - “📝 Avto javob matni” (profil uchun alohida avto javob matni)
+   - “📝 Guruh avto javob matni” (profil uchun alohida guruh avto javob matni)
+   - “✉ Xabar matni” (profil uchun alohida avtomatik xabar matni)
+   - “📄 Profil ma'lumotlari”
+   - “🚪 Profil o‘chirish” (tasdiqlash bilan: “Ha”/“Yo‘q” tugmalari)
+   - “🔙 Asosiy menyuga”
+   - “🔄 Avto javob yoqish/o‘chirish”
+   - “🔄 Guruh avto javob yoqish/o‘chirish”
+   - “🚀 Avtomatik yuborish yoqish/o‘chirish”
+3. **Funksionallik**:
+   - Har bir profil uchun avto javob, guruh avto javobi va avtomatik xabar yuborish alohida sozlanadi.
+   - Guruhga yozishda “Botga azo bo‘ling” xatosi chiqsa, bot avtomatik ravishda bog‘langan kanalga qo‘shiladi.
+   - Agar profil yoki guruhdan ban olinsa, guruh avtomatik o‘chiriladi.
+   - Kod tushunarli, sodda va xatosiz bo‘lishi kerak.
+
+### O‘zgarishlar:
+1. **Ma'lumotlar bazasi yangilandi**: `db.py` da har bir profil uchun alohida sozlamalar (avto javob, guruh avto javobi, xabar matni, holatlar) saqlanadi.
+2. **Asosiy menyu soddalashtirildi**: Faqat “Profil qo‘shish” va “Profillar ro‘yxati” qoldirildi.
+3. **Profil menyusi kengaytirildi**: Har bir profil uchun barcha sozlamalar (avto javob, guruh avto javobi, xabar matni, yoqish/o‘chirish) alohida boshqariladi.
+4. **Profil o‘chirish tasdiqlash bilan**: “🚪 Profil o‘chirish” bosilganda “Ha”/“Yo‘q” tugmalari chiqadi.
+5. **Avtomatik kanalga qo‘shilish**: `ChatWriteForbiddenError` bo‘lsa, `handle_linked_channel` bog‘langan kanalga qo‘shiladi.
+6. **Ban holati**: Agar guruhdan ban olinsa, guruh ro‘yxatdan o‘chiriladi va profildan chiqiladi.
+7. **Interfeys**: Tugmalar chiroyli tartiblandi (3 ta ustunda), xabarlar emoji bilan boyitildi, sodda va tushunarli.
+
+### Fayl tuzilishi:
+- `config.py`, `states.py` o‘zgarishsiz qoldirildi.
+- Yangilangan fayllar: `db.py`, `constants.py`, `keyboards.py`, `aiogram_handlers.py`, `telethon_utils.py`, `main.py`.
+
+### `db.py`
+<xaiArtifact artifact_id="7cce8d93-5e00-4015-9a69-0b1c8150c02d" artifact_version_id="4048d764-6ec8-408d-b1f3-97f65e975a77" title="db.py" contentType="text/python">
+import sqlite3
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+def init_db():
+    try:
+        conn = sqlite3.connect('userbot_settings.db')
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            api_id INTEGER,
+            api_hash TEXT,
+            phone TEXT,
+            session_name TEXT,
+            auto_reply_enabled INTEGER DEFAULT 0,
+            auto_reply_text TEXT DEFAULT 'Salom! Bu avtomatik javob.',
+            response_reply_enabled INTEGER DEFAULT 0,
+            response_reply_text TEXT DEFAULT 'Avto javob guruhda.',
+            message_text TEXT DEFAULT '📢 Bu avtomatik xabar!',
+            auto_send_enabled INTEGER DEFAULT 0,
+            messages_per_minute INTEGER DEFAULT 30,
+            send_interval INTEGER DEFAULT 60
+        )''')
+        c.execute('''CREATE TABLE IF NOT EXISTS groups (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            link TEXT,
+            profile_id INTEGER,
+            FOREIGN KEY (profile_id) REFERENCES profiles(id)
+        )''')
+        conn.commit()
+        logger.info("Ma'lumotlar bazasi muvaffaqiyatli yaratildi.")
+    except Exception as e:
+        logger.error(f"Ma'lumotlar bazasi yaratishda xato: {e}")
+    finally:
+        conn.close()
+
+def save_profile(api_id, api_hash, phone, session_name):
+    try:
+        conn = sqlite3.connect('userbot_settings.db')
+        c = conn.cursor()
+        c.execute("INSERT INTO profiles (api_id, api_hash, phone, session_name) VALUES (?, ?, ?, ?)",
+                  (api_id, api_hash, phone, session_name))
+        conn.commit()
+        profile_id = c.lastrowid
+        logger.info(f"Profil saqlandi: {phone}, ID: {profile_id}")
+        return profile_id
+    except Exception as e:
+        logger.error(f"Profil saqlashda xato: {e}")
+        return None
+    finally:
+        conn.close()
+
+def remove_profile(profile_id):
+    try:
+        conn = sqlite3.connect('userbot_settings.db')
+        c = conn.cursor()
+        c.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
+        c.execute("DELETE FROM groups WHERE profile_id = ?", (profile_id,))
+        conn.commit()
+        logger.info(f"Profil o‘chirildi: ID {profile_id}")
+    except Exception as e:
+        logger.error(f"Profil o‘chirishda xato: {e}")
+    finally:
+        conn.close()
+
+def load_profiles():
+    try:
+        conn = sqlite3.connect('userbot_settings.db')
+        c = conn.cursor()
+        c.execute("SELECT id, api_id, api_hash, phone, session_name, auto_reply_enabled, auto_reply_text, response_reply_enabled, response_reply_text, message_text, auto_send_enabled, messages_per_minute, send_interval FROM profiles")
+        profiles = [{'id': row[0], 'api_id': row[1], 'api_hash': row[2], 'phone': row[3], 'session_name': row[4], 
+                     'auto_reply_enabled': row[5], 'auto_reply_text': row[6], 'response_reply_enabled': row[7], 
+                     'response_reply_text': row[8], 'message_text': row[9], 'auto_send_enabled': row[10], 
+                     'messages_per_minute': row[11], 'send_interval': row[12]} for row in c.fetchall()]
+        return profiles
+    except Exception as e:
+        logger.error(f"Profillarni yuklashda xato: {e}")
+        return []
+    finally:
+        conn.close()
+
+def save_group(link, profile_id):
+    try:
+        conn = sqlite3.connect('userbot_settings.db')
+        c = conn.cursor()
+        c.execute("INSERT OR IGNORE INTO groups (link, profile_id) VALUES (?, ?)", (link, profile_id))
+        conn.commit()
+        logger.info(f"Guruh saqlandi: {link}, Profil ID: {profile_id}")
+    except Exception as e:
+        logger.error(f"Guruh saqlashda xato: {e}")
+    finally:
+        conn.close()
+
+def remove_group(link, profile_id):
+    try:
+        conn = sqlite3.connect('userbot_settings.db')
+        c = conn.cursor()
+        c.execute("DELETE FROM groups WHERE link = ? AND profile_id = ?", (link, profile_id))
+        conn.commit()
+        logger.info(f"Guruh o‘chirildi: {link}, Profil ID: {profile_id}")
+    except Exception as e:
+        logger.error(f"Guruh o‘chirishda xato: {e}")
+    finally:
+        conn.close()
+
+def load_groups(profile_id):
+    try:
+        conn = sqlite3.connect('userbot_settings.db')
+        c = conn.cursor()
+        c.execute("SELECT link FROM groups WHERE profile_id = ?", (profile_id,))
+        groups = [row[0] for row in c.fetchall()]
+        return groups
+    except Exception as e:
+        logger.error(f"Guruhlarni yuklashda xato: {e}")
+        return []
+    finally:
+        conn.close()
+
+def update_profile_setting(profile_id, key, value):
+    try:
+        conn = sqlite3.connect('userbot_settings.db')
+        c = conn.cursor()
+        c.execute(f"UPDATE profiles SET {key} = ? WHERE id = ?", (value, profile_id))
+        conn.commit()
+        logger.info(f"Profil sozlamasi yangilandi: ID {profile_id}, {key} = {value}")
+    except Exception as e:
+        logger.error(f"Profil sozlamasini yangilashda xato: {e}")
+    finally:
+        conn.close()
+
+def get_profile_setting(profile_id, key):
+    try:
+        conn = sqlite3.connect('userbot_settings.db')
+        c = conn.cursor()
+        c.execute(f"SELECT {key} FROM profiles WHERE id = ?", (profile_id,))
+        result = c.fetchone()
+        return result[0] if result else None
+    except Exception as e:
+        logger.error(f"Profil sozlamasini olishda xato: {e}")
+        return None
+    finally:
+        conn.close()
+</xaiArtifact>
+
+### `constants.py`
+<xaiArtifact artifact_id="f9ad42ee-b680-4a61-9a89-68115062f1a4" artifact_version_id="25621e44-68e0-476d-8cec-eb351e19adb6" title="constants.py" contentType="text/python">
+MAIN_MENU_BUTTONS = {
+    "ADD_PROFILE": "➕ Profil qo‘shish",
+    "LIST_PROFILES": "📋 Profillar ro‘yxati",
+}
+
+PROFILE_MENU_BUTTONS = {
+    "ADD_GROUP": "➕ Guruh qo‘shish",
+    "LIST_GROUPS": "📋 Guruhlar ro‘yxati",
+    "PROFILE_INFO": "📄 Profil ma'lumotlari",
+    "CHANGE_AUTO_REPLY_TEXT": "📝 Avto javob matni",
+    "TOGGLE_AUTO_REPLY": "🔄 Avto javob yoqish/o‘chirish",
+    "CHANGE_RESPONSE_REPLY_TEXT": "📝 Guruh avto javob matni",
+    "TOGGLE_RESPONSE_REPLY": "🔄 Guruh avto javob yoqish/o‘chirish",
+    "MESSAGE_TEXT": "✉ Xabar matni",
+    "TOGGLE_AUTO_SEND": "🚀 Avtomatik yuborish yoqish/o‘chirish",
+    "DELETE_PROFILE": "🚪 Profil o‘chirish",
+    "BACK_TO_MAIN": "🔙 Asosiy menyuga",
+}
+
+DELETE_CONFIRM_BUTTONS = {
+    "CONFIRM_YES": "✅ Ha",
+    "CONFIRM_NO": "❌ Yo‘q",
+}
+
+MESSAGES = {
+    "NO_PERMISSION": "🚫 Sizga ruxsat yo‘q.",
+    "WELCOME": "🤖 Userbot boshqaruv paneliga xush kelibsiz!",
+    "INVALID_PHONE": "📱 Telefon raqami + bilan boshlanishi va raqamlardan iborat bo‘lishi kerak (masalan, +998901234567).",
+    "INVALID_API_ID": "🔢 Iltimos, faqat butun son yuboring (API ID).",
+    "INVALID_API_HASH": "🔑 API HASH bo‘sh bo‘lmasligi kerak.",
+    "PROFILE_ADDED": "✅ Profil qo‘shildi: {phone}",
+    "BACK_TO_MAIN": "🏠 Asosiy menyuga qaytdingiz.",
+    "NO_PROFILES": "📭 Hozircha profil yo‘q.",
+    "PROFILE_NOT_FOUND": "❌ Profil topilmadi: {phone}",
+    "PROFILE_DELETED": "🗑 {phone} profili o‘chirildi.",
+    "NO_GROUPS": "📭 Hozircha guruh yo‘q.",
+    "GROUPS_ADDED": "✅ {count} ta yangi guruh qo‘shildi. Umumiy: {total} ta.",
+    "INVALID_CODE": "🔢 Kod faqat raqamlardan iborat bo‘lishi kerak.",
+    "INVALID_TEXT": "📝 Iltimos, bo‘sh bo‘lmagan matn yuboring.",
+    "AUTO_SEND_TOGGLED": "🚀 Avtomatik yuborish {status}.",
+    "AUTO_REPLY_TOGGLED": "🔄 Avto javob {status}.",
+    "RESPONSE_REPLY_TOGGLED": "🔄 Guruh avto javob {status}.",
+    "TEXT_UPDATED": "✅ {type} o‘zgartirildi: {text}",
+    "CONFIRM_DELETE": "🗑 {phone} profilini o‘chirishni xohlaysizmi?",
+}
+</xaiArtifact>
+
+### `keyboards.py`
+<xaiArtifact artifact_id="3e511bed-b50d-4892-84c3-6f99e446244e" artifact_version_id="99b01a63-9849-4f42-9940-0904182e1a9a" title="keyboards.py" contentType="text/python">
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from constants import MAIN_MENU_BUTTONS, PROFILE_MENU_BUTTONS, DELETE_CONFIRM_BUTTONS
+
+def get_main_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=MAIN_MENU_BUTTONS["ADD_PROFILE"]), KeyboardButton(text=MAIN_MENU_BUTTONS["LIST_PROFILES"])],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+def get_profile_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["ADD_GROUP"]),
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["LIST_GROUPS"]),
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["PROFILE_INFO"])
+            ],
+            [
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["CHANGE_AUTO_REPLY_TEXT"]),
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["TOGGLE_AUTO_REPLY"]),
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["CHANGE_RESPONSE_REPLY_TEXT"])
+            ],
+            [
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["TOGGLE_RESPONSE_REPLY"]),
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["MESSAGE_TEXT"]),
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["TOGGLE_AUTO_SEND"])
+            ],
+            [
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["DELETE_PROFILE"]),
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["BACK_TO_MAIN"])
+            ]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+def get_profile_selection_keyboard(profiles: list) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=p['phone'])] for p in profiles] + [[KeyboardButton(text=MAIN_MENU_BUTTONS["ADD_PROFILE"])]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+
+def get_delete_confirm_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text=DELETE_CONFIRM_BUTTONS["CONFIRM_YES"]),
+                KeyboardButton(text=DELETE_CONFIRM_BUTTONS["CONFIRM_NO"])
+            ]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+</xaiArtifact>
+
+### `aiogram_handlers.py`
+<xaiArtifact artifact_id="f101aa35-ab86-4855-b8d1-a07061f885e8" artifact_version_id="054eb6ac-8e39-4c2a-bdc2-160c01127904" title="aiogram_handlers.py" contentType="text/python">
+import logging
+from functools import wraps
+from aiogram import Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from telethon import TelegramClient
+from telethon.errors import SessionPasswordNeededError, PhoneNumberInvalidError, ApiIdInvalidError
+from telethon.tl.functions.auth import SendCodeRequest
+from config import ADMIN_ID
+from db import load_profiles, save_profile, remove_profile, load_groups, get_profile_setting, update_profile_setting
+from states import SettingsForm, ProfileForm, MainForm
+from telethon_utils import auto_reply_handler, response_reply_handler, load_existing_groups
+from constants import MESSAGES, MAIN_MENU_BUTTONS, PROFILE_MENU_BUTTONS, DELETE_CONFIRM_BUTTONS
+from keyboards import get_main_keyboard, get_profile_keyboard, get_profile_selection_keyboard, get_delete_confirm_keyboard
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+dp = Dispatcher()
+clients = []
+
+def admin_only(handler):
+    @wraps(handler)
+    async def wrapper(message: types.Message, *args, **kwargs):
+        if message.from_user.id != int(ADMIN_ID):
+            await message.answer(MESSAGES["NO_PERMISSION"])
+            return
+        return await handler(message, *args, **kwargs)
+    return wrapper
+
+def handle_errors(handler):
+    @wraps(handler)
+    async def wrapper(message: types.Message, state: FSMContext, *args, **kwargs):
+        try:
+            return await handler(message, state, *args, **kwargs)
+        except PhoneNumberInvalidError:
+            await message.answer(MESSAGES["INVALID_PHONE"])
+            await state.clear()
+        except ApiIdInvalidError:
+            await message.answer(MESSAGES["INVALID_API_ID"])
+            await state.clear()
+        except SessionPasswordNeededError:
+            await state.update_data(client=kwargs.get('client') or (await state.get_data()).get('client'))
+            await state.set_state(ProfileForm.waiting_for_password)
+            await message.answer("🔐 2FA parolni yuboring:")
+        except Exception as e:
+            logger.error(f"Xato yuz berdi: {e}")
+            await message.answer(f"❌ Xato yuz berdi: {str(e)}. Iltimos, qaytadan urinib ko‘ring.")
+            await state.clear()
+    return wrapper
+
+@dp.message(Command("start"))
+@admin_only
+async def start_cmd(message: types.Message, state: FSMContext):
+    await state.set_state(MainForm.main_menu)
+    await message.answer(MESSAGES["WELCOME"], reply_markup=get_main_keyboard())
+
+@dp.message(MainForm.main_menu, F.text == MAIN_MENU_BUTTONS["ADD_PROFILE"])
+@admin_only
+async def add_profile_start(message: types.Message, state: FSMContext):
+    await state.set_state(ProfileForm.waiting_for_api_id)
+    await message.answer("🔢 API ID ni yuboring (my.telegram.org dan oling):")
+
+@dp.message(ProfileForm.waiting_for_api_id)
+@admin_only
+async def process_api_id(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer(MESSAGES["INVALID_API_ID"])
+        return
+    await state.update_data(api_id=int(message.text))
+    await state.set_state(ProfileForm.waiting_for_api_hash)
+    await message.answer("🔑 API HASH ni yuboring (my.telegram.org dan oling):")
+
+@dp.message(ProfileForm.waiting_for_api_hash)
+@admin_only
+async def process_api_hash(message: types.Message, state: FSMContext):
+    api_hash = message.text.strip()
+    if not api_hash:
+        await message.answer(MESSAGES["INVALID_API_HASH"])
+        return
+    await state.update_data(api_hash=api_hash)
+    await state.set_state(ProfileForm.waiting_for_phone)
+    await message.answer(MESSAGES["INVALID_PHONE"])
+
+@dp.message(ProfileForm.waiting_for_phone)
+@admin_only
+@handle_errors
+async def process_phone(message: types.Message, state: FSMContext):
+    phone = message.text.strip()
+    if not phone.startswith('+') or not phone[1:].isdigit():
+        await message.answer(MESSAGES["INVALID_PHONE"])
+        return
+    data = await state.get_data()
+    api_id = data['api_id']
+    api_hash = data['api_hash']
+    session_name = f"session_{phone[1:]}"
+    client = TelegramClient(session_name, api_id, api_hash)
+    await client.connect()
+    sent_code = await client(SendCodeRequest(phone, api_id, api_hash))
+    await state.update_data(client=client, session_name=session_name, code_hash=sent_code.phone_code_hash, phone=phone)
+    await state.set_state(ProfileForm.waiting_for_code)
+    await message.answer("🔢 Telegramdan kelgan tasdiqlash kodini yuboring:")
+
+@dp.message(ProfileForm.waiting_for_code)
+@admin_only
+@handle_errors
+async def process_code(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    client = data.get('client')
+    phone = data.get('phone')
+    code_hash = data.get('code_hash')
+    code = message.text.strip()
+    if not code.isdigit():
+        await message.answer(MESSAGES["INVALID_CODE"])
+        return
+    await client.sign_in(phone=phone, code=code, phone_code_hash=code_hash)
+    api_id = data.get('api_id')
+    api_hash = data.get('api_hash')
+    session_name = data.get('session_name')
+    profile_id = save_profile(api_id, api_hash, phone, session_name)
+    if profile_id is None:
+        await client.disconnect()
+        await message.answer("❌ Profil saqlanmadi. Ma'lumotlar bazasi bilan muammo yuz berdi.")
+        await state.clear()
+        return
+    client.profile_id = profile_id
+    client.add_event_handler(auto_reply_handler, events.NewMessage(incoming=True))
+    client.add_event_handler(response_reply_handler, events.NewMessage(incoming=True, pattern=r'(?i)@[\w\d_]+'))
+    await load_existing_groups(client, profile_id)
+    clients.append(client)
+    await message.answer(MESSAGES["PROFILE_ADDED"].format(phone=phone))
+    await state.set_state(MainForm.main_menu)
+    await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+
+@dp.message(ProfileForm.waiting_for_password)
+@admin_only
+@handle_errors
+async def process_password(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    client = data.get('client')
+    phone = data.get('phone')
+    session_name = data.get('session_name')
+    api_id = data.get('api_id')
+    api_hash = data.get('api_hash')
+    password = message.text.strip()
+    await client.sign_in(password=password)
+    profile_id = save_profile(api_id, api_hash, phone, session_name)
+    if profile_id is None:
+        await client.disconnect()
+        await message.answer("❌ Profil saqlanmadi. Ma'lumotlar bazasi bilan muammo yuz berdi.")
+        await state.clear()
+        return
+    client.profile_id = profile_id
+    client.add_event_handler(auto_reply_handler, events.NewMessage(incoming=True))
+    client.add_event_handler(response_reply_handler, events.NewMessage(incoming=True, pattern=r'(?i)@[\w\d_]+'))
+    await load_existing_groups(client, profile_id)
+    clients.append(client)
+    await message.answer(MESSAGES["PROFILE_ADDED"].format(phone=phone))
+    await state.set_state(MainForm.main_menu)
+    await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+
+@dp.message(MainForm.main_menu, F.text == MAIN_MENU_BUTTONS["LIST_PROFILES"])
+@admin_only
+async def show_profiles(message: types.Message, state: FSMContext):
+    profiles = load_profiles()
+    if not profiles:
+        await message.answer(MESSAGES["NO_PROFILES"])
+        return
+    await state.set_state(MainForm.profile_menu)
+    await message.answer("📱 Profilni tanlang:", reply_markup=get_profile_selection_keyboard(profiles))
+
+@dp.message(MainForm.profile_menu, F.text.regexp(r'\+998\d{9}'))
+@admin_only
+async def select_profile(message: types.Message, state: FSMContext):
+    profiles = load_profiles()
+    phone = message.text.strip()
+    selected = next((p for p in profiles if p['phone'] == phone), None)
+    if not selected:
+        await message.answer(MESSAGES["PROFILE_NOT_FOUND"].format(phone=phone))
+        return
+    await state.update_data(current_profile_id=selected['id'], current_phone=phone)
+    await state.set_state(MainForm.profile_menu)
+    await message.answer(f"📱 {phone} profili tanlandi.", reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["DELETE_PROFILE"])
+@admin_only
+async def delete_profile_start(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    phone = data.get('current_phone')
+    if not phone:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    await state.set_state(MainForm.waiting_for_profile_delete)
+    await message.answer(MESSAGES["CONFIRM_DELETE"].format(phone=phone), reply_markup=get_delete_confirm_keyboard())
+
+@dp.message(MainForm.waiting_for_profile_delete, F.text == DELETE_CONFIRM_BUTTONS["CONFIRM_YES"])
+@admin_only
+async def process_delete_profile(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    phone = data.get('current_phone')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    client = next((c for c in clients if c.profile_id == profile_id), None)
+    if client:
+        try:
+            await client.disconnect()
+            clients.remove(client)
+        except Exception as e:
+            logger.error(f"Profilni o'chirishda ulanishni uzishda xato: {e}")
+    remove_profile(profile_id)
+    await message.answer(MESSAGES["PROFILE_DELETED"].format(phone=phone))
+    await state.set_state(MainForm.main_menu)
+    await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+
+@dp.message(MainForm.waiting_for_profile_delete, F.text == DELETE_CONFIRM_BUTTONS["CONFIRM_NO"])
+@admin_only
+async def cancel_delete_profile(message: types.Message, state: FSMContext):
+    await state.set_state(MainForm.profile_menu)
+    await message.answer("📱 Profil menyusiga qaytdingiz.", reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["ADD_GROUP"])
+@admin_only
+async def ask_group_link(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    await message.answer("🔗 Guruh linklarini yuboring (har birini yangi qatorda, masalan: https://t.me/groupname):")
+
+@dp.message(MainForm.profile_menu, F.text.contains("https://t.me/"))
+@admin_only
+async def add_groups(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    client = next((c for c in clients if c.profile_id == profile_id), None)
+    if not client:
+        await message.answer("❌ Tanlangan profil uchun ulanish topilmadi.")
+        return
+    links = [line.strip() for line in message.text.splitlines() if "https://t.me/" in line]
+    groups = load_groups(profile_id)
+    added = 0
+    for link in links:
+        if link not in groups:
+            try:
+                entity = await client.get_entity(link)
+                await client(JoinChannelRequest(entity))
+                save_group(link, profile_id)
+                await client.send_message(entity, get_profile_setting(profile_id, "message_text"))
+                added += 1
+            except Exception as e:
+                logger.error(f"Guruh qo‘shishda xato: {link} - {e}")
+    await message.answer(MESSAGES["GROUPS_ADDED"].format(count=added, total=len(load_groups(profile_id))))
+    await message.answer("📱 Profil menyusiga qaytdingiz.", reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["LIST_GROUPS"])
+@admin_only
+async def show_groups(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    groups = load_groups(profile_id)
+    if not groups:
+        await message.answer(MESSAGES["NO_GROUPS"])
+    else:
+        text = "\n".join([f"{i+1}. {g}" for i, g in enumerate(groups)])
+        await message.answer(f"📋 Guruhlar:\n{text}")
+    await message.answer("📱 Profil menyusiga qaytdingiz.", reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["PROFILE_INFO"])
+@admin_only
+async def profile_info(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    phone = data.get('current_phone')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    profiles = load_profiles()
+    selected = next((p for p in profiles if p['id'] == profile_id), None)
+    if not selected:
+        await message.answer(MESSAGES["PROFILE_NOT_FOUND"].format(phone=phone))
+        return
+    groups_count = len(load_groups(profile_id))
+    info = (
+        f"📱 Profil: {phone}\n"
+        f"🔢 API ID: {selected['api_id']}\n"
+        f"📊 Guruhlar soni: {groups_count}\n"
+        f"🔄 Avto javob: {'Faol' if bool(int(get_profile_setting(profile_id, 'auto_reply_enabled'))) else 'O‘chirilgan'}\n"
+        f"📝 Avto javob matni: {get_profile_setting(profile_id, 'auto_reply_text')}\n"
+        f"🔄 Guruh avto javobi: {'Faol' if bool(int(get_profile_setting(profile_id, 'response_reply_enabled'))) else 'O‘chirilgan'}\n"
+        f"📝 Guruh avto javob matni: {get_profile_setting(profile_id, 'response_reply_text')}\n"
+        f"✉ Yuboriladigan xabar: {get_profile_setting(profile_id, 'message_text')}\n"
+        f"⏱ 1 daqiqada guruhlar: {get_profile_setting(profile_id, 'messages_per_minute')}\n"
+        f"⏰ Yuborish oralig'i: {int(get_profile_setting(profile_id, 'send_interval')) // 60} daqiqa\n"
+        f"🚀 Avtomatik yuborish: {'Faol' if bool(int(get_profile_setting(profile_id, 'auto_send_enabled'))) else 'O‘chirilgan'}"
+    )
+    await message.answer(info, reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["CHANGE_AUTO_REPLY_TEXT"])
+@admin_only
+async def change_auto_reply_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    await state.set_state(SettingsForm.waiting_for_auto_reply_text)
+    await message.answer("📝 Yangi avto javob matnini yuboring:")
+
+@dp.message(SettingsForm.waiting_for_auto_reply_text)
+@admin_only
+async def process_auto_reply_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    text = message.text.strip()
+    if not text:
+        await message.answer(MESSAGES["INVALID_TEXT"])
+        return
+    update_profile_setting(profile_id, "auto_reply_text", text)
+    await message.answer(MESSAGES["TEXT_UPDATED"].format(type="Avto javob matni", text=text))
+    await state.set_state(MainForm.profile_menu)
+    await message.answer("📱 Profil menyusiga qaytdingiz.", reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["TOGGLE_AUTO_REPLY"])
+@admin_only
+async def toggle_auto_reply(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    auto_reply_enabled = bool(int(get_profile_setting(profile_id, "auto_reply_enabled") or 0))
+    auto_reply_enabled = not auto_reply_enabled
+    update_profile_setting(profile_id, "auto_reply_enabled", "1" if auto_reply_enabled else "0")
+    status = "yoqildi" if auto_reply_enabled else "o‘chirildi"
+    await message.answer(MESSAGES["AUTO_REPLY_TOGGLED"].format(status=status), reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["CHANGE_RESPONSE_REPLY_TEXT"])
+@admin_only
+async def change_response_reply_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    await state.set_state(SettingsForm.waiting_for_response_reply_text)
+    await message.answer("📝 Yangi guruh avto javob matnini yuboring:")
+
+@dp.message(SettingsForm.waiting_for_response_reply_text)
+@admin_only
+async def process_response_reply_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    text = message.text.strip()
+    if not text:
+        await message.answer(MESSAGES["INVALID_TEXT"])
+        return
+    update_profile_setting(profile_id, "response_reply_text", text)
+    await message.answer(MESSAGES["TEXT_UPDATED"].format(type="Guruh avto javob matni", text=text))
+    await state.set_state(MainForm.profile_menu)
+    await message.answer("📱 Profil menyusiga qaytdingiz.", reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["TOGGLE_RESPONSE_REPLY"])
+@admin_only
+async def toggle_response_reply(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    response_reply_enabled = bool(int(get_profile_setting(profile_id, "response_reply_enabled") or 0))
+    response_reply_enabled = not response_reply_enabled
+    update_profile_setting(profile_id, "response_reply_enabled", "1" if response_reply_enabled else "0")
+    status = "yoqildi" if response_reply_enabled else "o‘chirildi"
+    await message.answer(MESSAGES["RESPONSE_REPLY_TOGGLED"].format(status=status), reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["MESSAGE_TEXT"])
+@admin_only
+async def change_message_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    await state.set_state(SettingsForm.waiting_for_message_text)
+    await message.answer("📝 Yangi yuboriladigan xabar matnini yuboring:")
+
+@dp.message(SettingsForm.waiting_for_message_text)
+@admin_only
+async def process_message_text(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    text = message.text.strip()
+    if not text:
+        await message.answer(MESSAGES["INVALID_TEXT"])
+        return
+    update_profile_setting(profile_id, "message_text", text)
+    await message.answer(MESSAGES["TEXT_UPDATED"].format(type="Yuboriladigan xabar", text=text))
+    await state.set_state(MainForm.profile_menu)
+    await message.answer("📱 Profil menyusiga qaytdingiz.", reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["TOGGLE_AUTO_SEND"])
+@admin_only
+async def toggle_auto_send(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profile_id = data.get('current_profile_id')
+    if not profile_id:
+        await message.answer("❌ Profil tanlanmagan. Iltimos, avval profil tanlang.")
+        await state.set_state(MainForm.main_menu)
+        await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+        return
+    auto_send_enabled = bool(int(get_profile_setting(profile_id, "auto_send_enabled") or 0))
+    auto_send_enabled = not auto_send_enabled
+    update_profile_setting(profile_id, "auto_send_enabled", "1" if auto_send_enabled else "0")
+    status = "yoqildi" if auto_send_enabled else "o‘chirildi"
+    await message.answer(MESSAGES["AUTO_SEND_TOGGLED"].format(status=status), reply_markup=get_profile_keyboard())
+
+@dp.message(MainForm.profile_menu, F.text == PROFILE_MENU_BUTTONS["BACK_TO_MAIN"])
+@admin_only
+async def back_to_main_menu(message: types.Message, state: FSMContext):
+    await state.set_state(MainForm.main_menu)
+    await message.answer(MESSAGES["BACK_TO_MAIN"], reply_markup=get_main_keyboard())
+
+@dp.message()
+@admin_only
+async def general_handler(message: types.Message, state: FSMContext):
+    await message.answer("ℹ Iltimos, menyudan tanlang.")
+</xaiArtifact>
+
+### `telethon_utils.py`
+<xaiArtifact artifact_id="c7ec9870-c51d-412d-a0cc-60e49d7a894d" artifact_version_id="e9f267c9-1604-4b09-9703-17413aa0baa7" title="telethon_utils.py" contentType="text/python">
+import asyncio
+import logging
+from telethon import TelegramClient, events
+from telethon.errors import ChatWriteForbiddenError, ChannelPrivateError, FloodWaitError, UserBannedInChannelError
+from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest, GetFullChannelRequest
+from telethon.tl.types import Channel
+from db import load_groups, save_group, remove_group, get_profile_setting
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+async def auto_reply_handler(event):
+    """Shaxsiy xabarlarga avtomatik javob berish."""
+    profile_id = event.client.profile_id
+    auto_reply_enabled = bool(int(get_profile_setting(profile_id, "auto_reply_enabled") or 0))
+    auto_reply_text = get_profile_setting(profile_id, "auto_reply_text") or "Salom! Bu avtomatik javob."
+    if event.is_private and auto_reply_enabled:
+        await event.reply(auto_reply_text)
+
+async def response_reply_handler(event):
+    """Guruhlarda foydalanuvchi nomiga javob berish."""
+    profile_id = event.client.profile_id
+    response_reply_enabled = bool(int(get_profile_setting(profile_id, "response_reply_enabled") or 0))
+    response_reply_text = get_profile_setting(profile_id, "response_reply_text") or "Avto javob guruhda."
+    if not event.is_private and response_reply_enabled:
+        me = await event.client.get_me()
+        if me.username and f"@{me.username}" in event.raw_text:
+            await event.reply(response_reply_text)
+
+async def join_group(client: TelegramClient, link: str, profile_id: int) -> bool:
+    """Guruhga qo‘shilish va uni ma'lumotlar bazasiga saqlash."""
+    try:
+        entity = await client.get_entity(link)
+        await client(JoinChannelRequest(entity))
+        save_group(link, profile_id)
+        logger.info(f"{client._self_id} guruhga qo‘shildi: {link}")
+        return True
+    except Exception as e:
+        logger.error(f"{client._self_id} guruhga qo‘shilishda xato: {link} - {e}")
+        return False
+
+async def leave_group(client: TelegramClient, group_id: int, profile_id: int, link: str):
+    """Guruhdan chiqish va uni ma'lumotlar bazasidan o‘chirish."""
+    try:
+        await client(LeaveChannelRequest(group_id))
+        remove_group(link, profile_id)
+        logger.info(f"{client._self_id} guruhdan chiqildi: {link}")
+    except Exception as e:
+        logger.error(f"{client._self_id} guruhdan chiqishda xato: {link} - {e}")
+
+async def handle_linked_channel(client: TelegramClient, entity, profile_id: int) -> bool:
+    """Guruhga bog‘langan kanalga qo‘shilish."""
+    try:
+        if isinstance(entity, Channel):
+            full = await client(GetFullChannelRequest(entity))
+            if full.full_chat.linked_chat_id:
+                link = f"https://t.me/c/{full.full_chat.linked_chat_id}"
+                await client(JoinChannelRequest(full.full_chat.linked_chat_id))
+                save_group(link, profile_id)
+                logger.info(f"{client._self_id} bog‘langan kanalga qo‘shildi: {link}")
+                return True
+    except Exception as e:
+        logger.error(f"{client._self_id} bog‘langan kanalni tekshirishda xato: {e}")
+    return False
+
+async def load_existing_groups(client: TelegramClient, profile_id: int):
+    """Telegramdan mavjud guruhlar va kanallarni yuklash."""
+    try:
+        dialogs = await client.get_dialogs()
+        for d in dialogs:
+            if isinstance(d.entity, Channel) and (d.entity.broadcast or d.entity.megagroup):
+                try:
+                    entity = d.entity
+                    link = f"https://t.me/{entity.username}" if entity.username else f"https://t.me/c/{entity.id}"
+                    save_group(link, profile_id)
+                    logger.info(f"{client._self_id} guruh yuklandi: {link}")
+                except Exception as e:
+                    logger.error(f"Guruh linkini olishda xato: {e}")
+    except Exception as e:
+        logger.error(f"{client._self_id} mavjud guruhlarni yuklashda xato: {e}")
+
+async def send_to_groups_auto(clients: list):
+    """Avtomatik ravishda guruhlarga xabar yuborish."""
+    while True:
+        for client in clients:
+            profile_id = client.profile_id
+            auto_send_enabled = bool(int(get_profile_setting(profile_id, "auto_send_enabled") or 0))
+            if not auto_send_enabled:
+                continue
+            message_text = get_profile_setting(profile_id, "message_text") or "📢 Bu avtomatik xabar!"
+            messages_per_minute = int(get_profile_setting(profile_id, "messages_per_minute") or 30)
+            send_interval = int(get_profile_setting(profile_id, "send_interval") or 60)
+            groups = load_groups(profile_id)
+            if not groups:
+                logger.info(f"{client._self_id} uchun guruhlar topilmadi.")
+                continue
+            logger.info(f"{client._self_id} uchun avtomatik yuborish boshlandi...")
+            for link in groups.copy():
+                try:
+                    entity = await client.get_entity(link)
+                    await client.send_message(entity, message_text)
+                    logger.info(f"{client._self_id} xabar yuborildi: {link}")
+                except ChatWriteForbiddenError:
+                    logger.warning(f"{client._self_id} yozish taqiqlangan: {link} — Bog‘langan kanal tekshirilmoqda...")
+                    if await handle_linked_channel(client, entity, profile_id):
+                        try:
+                            await client.send_message(entity, message_text)
+                            logger.info(f"{client._self_id} qayta yuborildi: {link}")
+                        except Exception as e:
+                            logger.error(f"{client._self_id} qayta yuborishda xato: {e}")
+                    else:
+                        await leave_group(client, entity.id, profile_id, link)
+                except (ChannelPrivateError, UserBannedInChannelError):
+                    logger.warning(f"{client._self_id} maxfiy kanal yoki ban: {link}")
+                    await leave_group(client, entity.id, profile_id, link)
+                except FloodWaitError as e:
+                    logger.warning(f"{client._self_id} FloodWait: {e.seconds}s kutish...")
+                    await asyncio.sleep(e.seconds)
+                except Exception as e:
+                    logger.error(f"{client._self_id} xabar yuborishda xato: {link} - {e}")
+                    await leave_group(client, entity.id, profile_id, link)
+                await asyncio.sleep(60 / messages_per_minute)
+        await asyncio.sleep(60)
+</xaiArtifact>
+
+### `main.py`
+<xaiArtifact artifact_id="83aecff9-8408-49d5-bf7e-02a57d6cc75e" artifact_version_id="12981e8b-a2d1-4119-8695-2de5391e5752" title="main.py" contentType="text/python">
+import asyncio
+import logging
+from aiogram import Bot
+from db import init_db, load_profiles
+from aiogram_handlers import dp, clients
+from telethon_utils import send_to_groups_auto, auto_reply_handler, response_reply_handler
+from telethon import TelegramClient, events
+from config import BOT_TOKEN
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+init_db()
+bot = Bot(token=BOT_TOKEN)
+
+async def main():
+    """Botni ishga tushirish va profillarni yuklash."""
+    profiles = load_profiles()
+    for prof in profiles:
+        client = TelegramClient(prof['session_name'], prof['api_id'], prof['api_hash'])
+        client.profile_id = prof['id']
+        try:
+            await client.connect()
+            if await client.is_user_authorized():
+                client.add_event_handler(auto_reply_handler, events.NewMessage(incoming=True))
+                client.add_event_handler(response_reply_handler, events.NewMessage(incoming=True, pattern=r'(?i)@[\w\d_]+'))
+                await load_existing_groups(client, prof['id'])
+                clients.append(client)
+                me = await client.get_me()
+                logger.info(f"🔗 Userbot ulandi: {me.first_name} (@{me.username or 'None'})")
+            else:
+                logger.warning(f"Profil avtorizatsiya qilinmadi: {prof['phone']}")
+                await client.disconnect()
+        except Exception as e:
+            logger.error(f"Profil ulanmadi {prof['phone']}: {e}")
+            await client.disconnect()
+
+    asyncio.create_task(send_to_groups_auto(clients))
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+</xaiArtifact>
+
+### Asosiy o‘zgarishlar:
+1. **Ma'lumotlar bazasi**:
+   - `profiles` jadvaliga har bir profil uchun alohida sozlamalar qo‘shildi: `auto_reply_enabled`, `auto_reply_text`, `response_reply_enabled`, `response_reply_text`, `message_text`, `auto_send_enabled`, `messages_per_minute`, `send_interval`.
+   - `update_profile_setting` va `get_profile_setting` funksiyalari profil sozlamalarini boshqarish uchun qo‘shildi.
+2. **Asosiy menyu**:
+   - Faqat “➕ Profil qo‘shish” va “📋 Profillar ro‘yxati” qoldirildi.
+   - Profil tanlashda “➕ Profil qo‘shish” tugmasi saqlanib qolindi.
+3. **Profil menyusi**:
+   - Tugmalar 3 ta ustunda tartiblandi:
+     ```
+     [➕ Guruh qo‘shish] [📋 Guruhlar ro‘yxati] [📄 Profil ma'lumotlari]
+     [📝 Avto javob matni] [🔄 Avto javob yoqish/o‘chirish] [📝 Guruh avto javob matni]
+     [🔄 Guruh avto javob yoqish/o‘chirish] [✉ Xabar matni] [🚀 Avtomatik yuborish yoqish/o‘chirish]
+     [🚪 Profil o‘chirish] [🔙 Asosiy menyuga]
+     ```
+   - Har bir profil uchun avto javob, guruh avto javobi va avtomatik xabar alohida sozlanadi.
+4. **Profil o‘chirish**:
+   - “🚪 Profil o‘chirish” bosilganda “✅ Ha” va “❌ Yo‘q” tugmalari chiqadi.
+   - “Ha” bosilsa, profil va unga tegishli guruhlar o‘chiriladi.
+   - “Yo‘q” bosilsa, profil menyusiga qaytiladi.
+5. **Avtomatik kanalga qo‘shilish**:
+   - `ChatWriteForbiddenError` bo‘lsa, `handle_linked_channel` bog‘langan kanalga qo‘shiladi va xabar qayta yuboriladi.
+   - Muvaffaqiyatsiz bo‘lsa, guruh ro‘yxatdan o‘chiriladi va profildan chiqiladi.
+6. **Ban holati**:
+   - `UserBannedInChannelError` yoki `ChannelPrivateError` bo‘lsa, guruh avtomatik o‘chiriladi va profildan chiqiladi.
+7. **Avtomatik xabar yuborish**:
+   - Har bir profil uchun alohida `auto_send_enabled` va `message_text` ishlatiladi.
+   - Har 1 daqiqada `messages_per_minute` chegarasi bilan xabarlar yuboriladi.
+8. **Interfeys**:
+   - Tugmalar sodda va tushunarli, emoji bilan boyitildi.
+   - Har bir harakatdan so‘ng foydalanuvchi tegishli menyuga qaytariladi.
+
+### Foydalanish bo‘yicha ko‘rsatmalar:
+1. **Kerakli kutubxonalar**:
+   ```bash
+   pip install aiogram telethon python-dotenv
+   ```
+2. **Fayl tuzilishi**:
+   - `config.py`, `states.py` fayllarini saqlang.
+   - Yangilangan `db.py`, `constants.py`, `keyboards.py`, `aiogram_handlers.py`, `telethon_utils.py`, `main.py` fayllarini loyiha papkasiga almashtiring.
+   - `.env` faylida quyidagilarni sozlang:
+     ```plaintext
+     BOT_TOKEN=your_bot_token_here
+     ADMIN_ID=your_telegram_user_id_here
+     ```
+3. **Botni ishga tushirish**:
+   ```bash
+   python main.py
+   ```
+   - Konsolda “Ma'lumotlar bazasi muvaffaqiyatli yaratildi.” va ulangan profillar haqida xabarlar ko‘rinadi.
+4. **Profil qo‘shish**:
+   - `/start` buyrug‘ini yuboring.
+   - “➕ Profil qo‘shish” tugmasini bosing.
+   - API ID va API Hash ni `my.telegram.org` dan oling.
+   - Telefon raqamini (`+998901234567` kabi) kiriting.
+   - Telegramdan kelgan kodni yuboring, agar 2FA paroli talab qilinsa, uni kiriting.
+   - Profil qo‘shilganda, Telegramdagi guruhlar va kanallar avtomatik yuklanadi.
+5. **Profil sozlamalari**:
+   - “📋 Profillar ro‘yxati” dan telefon raqamini tanlang.
+   - Profil menyusida:
+     - “📝 Avto javob matni” bilan shaxsiy xabarlarga javob matnini o‘zgartiring.
+     - “🔄 Avto javob yoqish/o‘chirish” bilan avto javobni yoqing/o‘chiring.
+     - “📝 Guruh avto javob matni” bilan guruhlarda @username ga javob matnini o‘zgartiring.
+     - “🔄 Guruh avto javob yoqish/o‘chirish” bilan guruh avto javobni yoqing/o‘chiring.
+     - “✉ Xabar matni” bilan avtomatik yuboriladigan xabar matnini o‘zgartiring.
+     - “🚀 Avtomatik yuborish yoqish/o‘chirish” bilan xabar yuborishni boshlang/to‘xtating.
+     - “📄 Profil ma'lumotlari” bilan profil sozlamalarini ko‘ring.
+     - “🚪 Profil o‘chirish” bilan profilni o‘chiring (“Ha”/“Yo‘q” tasdiqlashi bilan).
+6. **Guruh qo‘shish**:
+   - Profil menyusida “➕ Guruh qo‘shish” ni bosing va guruh linkini yuboring (masalan, `https://t.me/groupname`).
+   - Bot guruhga qo‘shiladi, agar “Botga azo bo‘ling” xatosi chiqsa, bog‘langan kanalga avtomatik qo‘shiladi.
+7. **Avtomatik xabar yuborish**:
+   - Har bir profil uchun “🚀 Avtomatik yuborish yoqish/o‘chirish” bilan faollashtiriladi.
+   - Xabarlar profilning `message_text` sozlamasiga asosan har 1 daqiqada yuboriladi.
+
+### Xatolarni bartaraf qilish:
+- **Avtomatik xabar yuborilmayapti**:
+  - Konsolda xato xabarlarini tekshiring:
+    ```bash
+    tail -f log.txt
+    ```
+    (Loggingni faylga yo‘naltirish uchun `logging.basicConfig(filename='log.txt', ...)` qo‘shing).
+  - Profil uchun `auto_send_enabled` `1` ekanligini tekshiring:
+    ```bash
+    sqlite3 userbot_settings.db "SELECT auto_send_enabled FROM profiles WHERE id = <profile_id>;"
+    ```
+  - Guruhlar ro‘yxati bo‘sh emasligini tekshiring:
+    ```bash
+    sqlite3 userbot_settings.db "SELECT * FROM groups WHERE profile_id = <profile_id>;"
+    ```
+- **Kanalga qo‘shilmayapti**:
+  - Konsolda `ChatWriteForbiddenError` yoki boshqa xatolar borligini tekshiring.
+  - `handle_linked_channel` funksiyasi ishlaganligini loglardan ko‘ring.
+- **Ma'lumotlar bazasi xatosi**:
+  - Yozish ruxsatini tekshiring:
+    ```bash
+    chmod 777 /path/to/userbot
+    ```
+  - Agar muammo davom etsa, bazani qayta yarating:
+    ```bash
+    rm userbot_settings.db && python main.py
+    ```
+
+Agar qo‘shimcha muammolar bo‘lsa yoki konsolda aniq xato xabari chiqsa, uni yuboring, darhol tuzataman. Interfeys yoki funksionallik bo‘yicha qo‘shimcha takliflar bo‘lsa, ayting!

@@ -25,7 +25,8 @@ Thumbs.db
 .idea/
 *.sublime-workspace
 *.sublime-project
-
+.sessions-journal
+.sessions/
 # Log fayllar
 *.log
 logs/

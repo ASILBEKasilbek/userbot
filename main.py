@@ -6,8 +6,8 @@ from aiogram_handlers import dp, clients
 from telethon_utils import send_to_groups_auto, auto_reply_handler, response_reply_handler
 from telethon import TelegramClient, events
 from config import BOT_TOKEN
-from telethon.errors import SessionPasswordNeededError, PhoneNumberInvalidError, ApiIdInvalidError
 from telethon_utils import load_existing_groups
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
