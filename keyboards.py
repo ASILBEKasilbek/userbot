@@ -15,7 +15,7 @@ def get_profile_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [
                 # KeyboardButton(text=PROFILE_MENU_BUTTONS["ADD_GROUP"]),
-                # KeyboardButton(text=PROFILE_MENU_BUTTONS["LIST_GROUPS"]),
+                KeyboardButton(text=PROFILE_MENU_BUTTONS["LIST_GROUPS"]),
                 KeyboardButton(text=PROFILE_MENU_BUTTONS["PROFILE_INFO"]),
                 KeyboardButton(text=PROFILE_MENU_BUTTONS["DELETE_PROFILE"])
             ],
