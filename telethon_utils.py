@@ -77,7 +77,6 @@ async def load_existing_groups(client: TelegramClient, profile_id: int):
                     logger.error(f"Guruh linkini olishda xato: {e}")
     except Exception as e:
         logger.error(f"{client._self_id} mavjud guruhlarni yuklashda xato: {e}")
-
 import asyncio
 import logging
 from telethon.errors import (
@@ -93,8 +92,10 @@ from telethon_utils import handle_linked_channel, leave_group
 
 logger = logging.getLogger(__name__)
 
+MAX_CONCURRENT_SENDS = 5  # bir vaqtning o‘zida 5 ta guruhga yuboradi (o‘zgartirsa bo‘ladi)
+
 async def try_join_linked_channel(client, entity, profile_id: int) -> bool:
-    """Agar guruhga yozish uchun kanalga obuna bo‘lish kerak bo‘lsa, avtomatik qo‘shiladi."""
+    """Agar yozish uchun kanalga obuna bo‘lish kerak bo‘lsa, avtomatik qo‘shiladi."""
     try:
         if isinstance(entity, Channel):
             full = await client(GetFullChannelRequest(entity))
@@ -102,88 +103,89 @@ async def try_join_linked_channel(client, entity, profile_id: int) -> bool:
             if linked_id:
                 try:
                     await client(JoinChannelRequest(linked_id))
-                    logger.info(f"📡 {client._self_id} bog‘langan kanalga avtomatik qo‘shildi (ID={linked_id})")
+                    logger.info(f"📡 {client._self_id} kanalga avtomatik qo‘shildi (ID={linked_id})")
                     return True
                 except Exception as e:
-                    logger.warning(f"❌ {client._self_id} kanalga qo‘shila olmadi (ID={linked_id}): {e}")
+                    logger.warning(f"❌ Kanalga qo‘shila olmadi (ID={linked_id}): {e}")
                     return False
     except Exception as e:
-        logger.error(f"🔍 Bog‘langan kanalni aniqlashda xato: {e}")
+        logger.error(f"🔍 Bog‘langan kanalni tekshirishda xato: {e}")
+    return False
+
+
+async def send_message_safe(client, link, message_text, profile_id, idx, total_groups):
+    """Bitta guruhga xavfsiz xabar yuborish (xatolardan himoyalangan)."""
+    entity = None
+    try:
+        entity = await client.get_entity(link)
+        msg = await client.send_message(entity, message_text)
+        logger.info(f"✅ [{idx}/{total_groups}] Xabar yuborildi: {link} (msg_id={msg.id})")
+        return True
+    except ChatWriteForbiddenError:
+        logger.warning(f"⚠️ [{idx}/{total_groups}] {link} yozish taqiqlangan — kanalga a’zo bo‘lish kerak.")
+        joined = await try_join_linked_channel(client, entity, profile_id)
+        if joined:
+            try:
+                msg = await client.send_message(entity, message_text)
+                logger.info(f"🔁 {link} — kanalga a’zo bo‘lgach yuborildi (msg_id={msg.id})")
+                return True
+            except Exception as e:
+                logger.error(f"❌ {link} qayta yuborishda xato: {e}")
+        else:
+            await leave_group(client, entity.id, profile_id, link)
+    except (ChannelPrivateError, UserBannedInChannelError):
+        if entity:
+            await leave_group(client, entity.id, profile_id, link)
+        logger.warning(f"🚫 {link} — maxfiy yoki ban holati.")
+    except FloodWaitError as e:
+        logger.warning(f"⏳ FloodWait {e.seconds}s: {link}")
+        await asyncio.sleep(e.seconds)
+    except Exception as e:
+        logger.error(f"❌ {link} - umumiy xato: {e}")
+        if entity:
+            await leave_group(client, entity.id, profile_id, link)
     return False
 
 
 async def send_to_groups_auto(clients: list):
-    """Avtomatik ravishda guruhlarga xabar yuborish (kanalga obuna bo‘lishni ham o‘zi qiladi)."""
-    
+    """Avtomatik xabar yuborish — parallel va tez ishlaydigan versiya."""
     while True:
         for client in clients:
             profile_id = client.profile_id
             auto_send_enabled = bool(int(get_profile_setting(profile_id, "auto_send_enabled") or 0))
-            
             if not auto_send_enabled:
                 logger.info(f"🚫 Profil {client._self_id} uchun auto_send o‘chirilgan.")
                 continue
 
-            message_text = get_profile_setting(profile_id, "message_text") or "📢 Bu avtomatik xabar!"
-            messages_per_minute = int(get_profile_setting(profile_id, "messages_per_minute") or 30)
+            message_text = get_profile_setting(profile_id, "message_text") or "📢 Avtomatik xabar!"
             send_interval = int(get_profile_setting(profile_id, "send_interval") or 60)
             groups = load_groups(profile_id)
 
             if not groups:
-                logger.warning(f"⚠️ {client._self_id} uchun guruhlar topilmadi.")
+                logger.warning(f"⚠️ {client._self_id} uchun guruhlar yo‘q.")
                 continue
 
             total_groups = len(groups)
-            logger.info(f"🚀 {client._self_id} uchun avtomatik yuborish boshlandi ({total_groups} ta guruh).")
+            logger.info(f"🚀 {client._self_id} uchun yuborish boshlandi ({total_groups} ta guruh).")
 
+            sem = asyncio.Semaphore(MAX_CONCURRENT_SENDS)
             success_count = 0
             fail_count = 0
 
-            for idx, link in enumerate(groups.copy(), start=1):
-                entity = None
-
-                try:
-                    entity = await client.get_entity(link)
-                    msg = await client.send_message(entity, message_text)
-                    logger.info(f"✅ [{idx}/{total_groups}] Xabar yuborildi: {link} (msg_id={msg.id})")
-                    success_count += 1
-
-                except ChatWriteForbiddenError:
-                    logger.warning(f"⚠️ [{idx}/{total_groups}] {link} yozish taqiqlangan — kanalga a’zo bo‘lish kerak bo‘lishi mumkin.")
-                    joined = await try_join_linked_channel(client, entity, profile_id)
-                    if joined:
-                        try:
-                            msg = await client.send_message(entity, message_text)
-                            logger.info(f"🔁 {link} — kanalga a’zo bo‘lgach xabar yuborildi (msg_id={msg.id})")
-                            success_count += 1
-                        except Exception as e:
-                            logger.error(f"❌ {link} qayta yuborishda xato: {e}")
-                            fail_count += 1
+            async def bounded_send(idx, link):
+                nonlocal success_count, fail_count
+                async with sem:
+                    result = await send_message_safe(client, link, message_text, profile_id, idx, total_groups)
+                    if result:
+                        success_count += 1
                     else:
-                        logger.warning(f"🚪 {link} — kanalga qo‘shila olmadim, guruhdan chiqiladi.")
-                        await leave_group(client, entity.id, profile_id, link)
                         fail_count += 1
+                    await asyncio.sleep(1.5)  # har biri orasida kichik pauza (flood xavfini kamaytiradi)
 
-                except (ChannelPrivateError, UserBannedInChannelError):
-                    if entity:
-                        logger.warning(f"🚫 [{idx}/{total_groups}] {link} — Maxfiy kanal yoki ban.")
-                        await leave_group(client, entity.id, profile_id, link)
-                    fail_count += 1
+            tasks = [bounded_send(i + 1, link) for i, link in enumerate(groups)]
+            await asyncio.gather(*tasks)
 
-                except FloodWaitError as e:
-                    logger.warning(f"⏳ [{idx}/{total_groups}] FloodWait: {e.seconds}s kutish...")
-                    await asyncio.sleep(e.seconds)
-                    fail_count += 1
-
-                except Exception as e:
-                    logger.error(f"❌ [{idx}/{total_groups}] {link} - umumiy xato: {e}")
-                    if entity:
-                        await leave_group(client, entity.id, profile_id, link)
-                    fail_count += 1
-
-                await asyncio.sleep(60 / messages_per_minute)
-
-            logger.info(f"📊 {client._self_id} uchun natija: {success_count} ta yuborildi, {fail_count} ta muvaffaqiyatsiz.")
+            logger.info(f"📊 {client._self_id} natija: ✅ {success_count}, ❌ {fail_count}")
             await asyncio.sleep(send_interval)
 
         await asyncio.sleep(60)
