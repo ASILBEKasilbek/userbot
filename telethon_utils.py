@@ -125,7 +125,6 @@ async def try_join_linked_channel(client, entity, profile_id: int) -> bool:
         logger.error(f"🔍 Bog‘langan kanalni aniqlashda xato: {e}")
 
     return False
-
 import asyncio
 import logging
 import random
@@ -133,14 +132,13 @@ from telethon.errors import ChatWriteForbiddenError, ChannelPrivateError, UserBa
 from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.types import Channel
 from db import load_groups, get_profile_setting
-from telethon_utils import handle_linked_channel, leave_group
 
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 30          # har bir daqiqada 30 ta guruh
-DELAY_BETWEEN_MSG = (2, 4)   # har bir xabar orasida 2-4 soniya
-PAUSE_BETWEEN_BATCH = 60     # 1 daqiqa tanaffus
-FLOOD_BACKOFF = True
+BATCH_SIZE = 30
+DELAY_BETWEEN_MSG = (2, 4)
+PAUSE_BETWEEN_BATCH = 60
+GLOBAL_SLEEP = 300  # barcha profillar uchun aylanib bo‘lgach 5 daqiqa dam
 
 
 async def send_message_safe(client, link, message_text, profile_id, idx, total_groups):
@@ -153,53 +151,52 @@ async def send_message_safe(client, link, message_text, profile_id, idx, total_g
 
     except ChatWriteForbiddenError:
         logger.warning(f"⚠️ [{idx}] Yozish taqiqlangan: {link}")
-        return False
-
     except (ChannelPrivateError, UserBannedInChannelError):
         logger.warning(f"🚫 [{idx}] Maxfiy yoki ban: {link}")
-        return False
-
     except FloodWaitError as e:
         wait_time = min(e.seconds, 3600)
         logger.warning(f"⏳ FloodWait {wait_time}s: {link}")
-        if FLOOD_BACKOFF:
-            await asyncio.sleep(wait_time)
-        return False
-
+        await asyncio.sleep(wait_time)
     except Exception as e:
         logger.error(f"❌ [{idx}] {link} - Xato: {e}")
-        return False
+    return False
 
 
 async def send_to_groups_auto(clients: list):
     """Har daqiqada 30 ta guruhga yuborib, keyingi 30tasiga o'tish."""
     while True:
-        for client in clients:
-            profile_id = client.profile_id
-            if not bool(int(get_profile_setting(profile_id, "auto_send_enabled") or 0)):
-                continue
+        try:
+            for client in clients:
+                profile_id = client.profile_id
+                if not bool(int(get_profile_setting(profile_id, "auto_send_enabled") or 0)):
+                    continue
 
-            message_text = get_profile_setting(profile_id, "message_text") or "📢 Avto xabar!"
-            groups = load_groups(profile_id)
-            total_groups = len(groups)
-            if not groups:
-                continue
+                message_text = get_profile_setting(profile_id, "message_text") or "📢 Avto xabar!"
+                groups = load_groups(profile_id)
+                total_groups = len(groups)
+                if not groups:
+                    continue
 
-            logger.info(f"🚀 {client._self_id} uchun {total_groups} ta guruhga yuborish boshlandi.")
+                logger.info(f"🚀 {client._self_id} uchun {total_groups} ta guruhga yuborish boshlandi.")
 
-            # Guruhlarni 30 tadan bo‘lib yuborish
-            for i in range(0, total_groups, BATCH_SIZE):
-                batch = groups[i:i + BATCH_SIZE]
-                logger.info(f"📦 Partiya: {i//BATCH_SIZE + 1} | {len(batch)} ta guruh yuboriladi...")
+                # Guruhlarni 30 tadan bo‘lib yuborish
+                for i in range(0, total_groups, BATCH_SIZE):
+                    batch = groups[i:i + BATCH_SIZE]
+                    logger.info(f"📦 Partiya: {i//BATCH_SIZE + 1} | {len(batch)} ta guruh yuboriladi...")
 
-                for j, link in enumerate(batch, start=i+1):
-                    await send_message_safe(client, link, message_text, profile_id, j, total_groups)
-                    await asyncio.sleep(random.uniform(*DELAY_BETWEEN_MSG))
+                    for j, link in enumerate(batch, start=i + 1):
+                        await send_message_safe(client, link, message_text, profile_id, j, total_groups)
+                        await asyncio.sleep(random.uniform(*DELAY_BETWEEN_MSG))
 
-                logger.info(f"😴 {PAUSE_BETWEEN_BATCH}s kutish (keyingi 30 ta guruhga o‘tish)...")
-                await asyncio.sleep(PAUSE_BETWEEN_BATCH)
+                    logger.info(f"😴 {PAUSE_BETWEEN_BATCH}s tanaffus (keyingi 30 ta guruh)...")
+                    await asyncio.sleep(PAUSE_BETWEEN_BATCH)
 
-            logger.info(f"✅ {client._self_id} uchun barcha {total_groups} ta guruh yuborildi.")
+                logger.info(f"✅ {client._self_id} uchun barcha {total_groups} ta guruh yuborildi.")
 
-        # Barcha profillar bo‘yicha aylanib chiqdi — yana 5 daqiqa dam
-        await asyncio.sleep(300)
+            logger.info(f"🌙 Barcha profillar uchun aylanib chiqildi. {GLOBAL_SLEEP}s kutish...")
+            await asyncio.sleep(GLOBAL_SLEEP)
+
+        except Exception as e:
+            logger.error(f"🔥 Asosiy siklda xato: {e}")
+            logger.info("♻️ 10 soniyadan keyin qayta uriniladi...")
+            await asyncio.sleep(10)
