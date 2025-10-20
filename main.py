@@ -7,15 +7,22 @@ from telethon_utils import send_to_groups_auto, auto_reply_handler, response_rep
 from telethon import TelegramClient, events
 from config import BOT_TOKEN
 from telethon_utils import load_existing_groups
-
+from aiogram import types
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 init_db()
 bot = Bot(token=BOT_TOKEN)
+async def set_default_commands(dp):
+    await dp.bot.set_my_commands(
+        [
+            types.BotCommand("start", "⚪️Botni ishga tushirish | 🟡Botni yangilash"),
+        ]
+    )
 
 async def main():
     """Botni ishga tushirish va profillarni yuklash."""
+    await set_default_commands(dp)
     profiles = load_profiles()
     for prof in profiles:
         client = TelegramClient(prof['session_name'], prof['api_id'], prof['api_hash'])
