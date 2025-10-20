@@ -8,21 +8,25 @@ from telethon import TelegramClient, events
 from config import BOT_TOKEN
 from telethon_utils import load_existing_groups
 from aiogram import types
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 init_db()
 bot = Bot(token=BOT_TOKEN)
-async def set_default_commands(dp):
-    await dp.bot.set_my_commands(
-        [
-            types.BotCommand("start", "⚪️Botni ishga tushirish | 🟡Botni yangilash"),
-        ]
-    )
+
+
+async def set_default_commands(bot: Bot):
+    """Bot uchun standart buyruqlarni o‘rnatadi."""
+    await bot.set_my_commands([
+        types.BotCommand(command="start", description="⚪️Botni ishga tushirish | 🟡Botni yangilash"),
+    ])
+
 
 async def main():
     """Botni ishga tushirish va profillarni yuklash."""
-    await set_default_commands(dp)
+    await set_default_commands(bot)
+
     profiles = load_profiles()
     for prof in profiles:
         client = TelegramClient(prof['session_name'], prof['api_id'], prof['api_hash'])
@@ -31,7 +35,10 @@ async def main():
             await client.connect()
             if await client.is_user_authorized():
                 client.add_event_handler(auto_reply_handler, events.NewMessage(incoming=True))
-                client.add_event_handler(response_reply_handler, events.NewMessage(incoming=True, pattern=r'(?i)@[\w\d_]+'))
+                client.add_event_handler(
+                    response_reply_handler,
+                    events.NewMessage(incoming=True, pattern=r'(?i)@[\w\d_]+')
+                )
                 await load_existing_groups(client, prof['id'])
                 clients.append(client)
                 me = await client.get_me()
@@ -45,6 +52,7 @@ async def main():
 
     asyncio.create_task(send_to_groups_auto(clients))
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

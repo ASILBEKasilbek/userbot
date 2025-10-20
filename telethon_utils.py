@@ -100,22 +100,38 @@ FLOOD_BACKOFF = True       # FloodWait aniqlansa avtomatik sekinlashish rejimi
 
 
 async def try_join_linked_channel(client, entity, profile_id: int) -> bool:
-    """Agar yozish uchun kanalga obuna bo‘lish kerak bo‘lsa, avtomatik qo‘shiladi."""
+    """Agar yozish uchun kanalga obuna bo‘lish kerak bo‘lsa, avtomatik kanalga qo‘shiladi."""
     try:
         if isinstance(entity, Channel):
             full = await client(GetFullChannelRequest(entity))
-            linked_id = getattr(full.full_chat, "linked_chat_id", None)
-            if linked_id:
+
+            # Guruh bilan bog‘langan kanalni tekshirish
+            linked_chat_id = getattr(full.full_chat, "linked_chat_id", None)
+            if linked_chat_id:
                 try:
-                    await client(JoinChannelRequest(linked_id))
-                    logger.info(f"📡 {client._self_id} kanalga avtomatik qo‘shildi (ID={linked_id})")
+                    linked_channel = await client.get_entity(linked_chat_id)
+                    await client(JoinChannelRequest(linked_channel))
+                    logger.info(f"📡 {client._self_id} kanalga avtomatik qo‘shildi: {linked_channel.title}")
                     return True
                 except Exception as e:
-                    logger.warning(f"❌ Kanalga qo‘shila olmadi (ID={linked_id}): {e}")
+                    logger.warning(f"❌ Kanalga qo‘shila olmadi: {e}")
                     return False
+
+            # Agar linked_chat_id topilmasa, kanal havolasini olishga urinadi
+            invite_link = getattr(full.full_chat, "exported_invite", None)
+            if invite_link and hasattr(invite_link, "link"):
+                try:
+                    await client(JoinChannelRequest(invite_link.link))
+                    logger.info(f"📡 {client._self_id} havola orqali kanalga qo‘shildi: {invite_link.link}")
+                    return True
+                except Exception as e:
+                    logger.warning(f"❌ Havola orqali kanalga qo‘shila olmadi: {e}")
+
     except Exception as e:
-        logger.error(f"🔍 Bog‘langan kanalni tekshirishda xato: {e}")
+        logger.error(f"🔍 Bog‘langan kanalni aniqlashda xato: {e}")
+
     return False
+
 
 
 async def send_message_safe(client, link, message_text, profile_id, idx, total_groups):
