@@ -64,7 +64,6 @@ async def handle_linked_channel(client: TelegramClient, entity, profile_id: int)
     return False
 
 async def load_existing_groups(client: TelegramClient, profile_id: int):
-    """Telegramdan mavjud guruhlar va kanallarni yuklash."""
     try:
         dialogs = await client.get_dialogs()
         for d in dialogs:
@@ -78,6 +77,7 @@ async def load_existing_groups(client: TelegramClient, profile_id: int):
                     logger.error(f"Guruh linkini olishda xato: {e}")
     except Exception as e:
         logger.error(f"{client._self_id} mavjud guruhlarni yuklashda xato: {e}")
+
 import asyncio
 import logging
 from telethon.errors import (
@@ -86,13 +86,34 @@ from telethon.errors import (
     UserBannedInChannelError,
     FloodWaitError,
 )
+from telethon.tl.functions.channels import JoinChannelRequest, GetFullChannelRequest
+from telethon.tl.types import Channel
 from db import load_groups, get_profile_setting
 from telethon_utils import handle_linked_channel, leave_group
 
 logger = logging.getLogger(__name__)
 
+async def try_join_linked_channel(client, entity, profile_id: int) -> bool:
+    """Agar guruhga yozish uchun kanalga obuna bo‘lish kerak bo‘lsa, avtomatik qo‘shiladi."""
+    try:
+        if isinstance(entity, Channel):
+            full = await client(GetFullChannelRequest(entity))
+            linked_id = getattr(full.full_chat, "linked_chat_id", None)
+            if linked_id:
+                try:
+                    await client(JoinChannelRequest(linked_id))
+                    logger.info(f"📡 {client._self_id} bog‘langan kanalga avtomatik qo‘shildi (ID={linked_id})")
+                    return True
+                except Exception as e:
+                    logger.warning(f"❌ {client._self_id} kanalga qo‘shila olmadi (ID={linked_id}): {e}")
+                    return False
+    except Exception as e:
+        logger.error(f"🔍 Bog‘langan kanalni aniqlashda xato: {e}")
+    return False
+
+
 async def send_to_groups_auto(clients: list):
-    """Avtomatik ravishda guruhlarga xabar yuborish (logger bilan, real-time natija)."""
+    """Avtomatik ravishda guruhlarga xabar yuborish (kanalga obuna bo‘lishni ham o‘zi qiladi)."""
     
     while True:
         for client in clients:
@@ -119,7 +140,7 @@ async def send_to_groups_auto(clients: list):
             fail_count = 0
 
             for idx, link in enumerate(groups.copy(), start=1):
-                entity = None  # har doim aniqlanadi, keyinchalik xato bo‘lmasligi uchun
+                entity = None
 
                 try:
                     entity = await client.get_entity(link)
@@ -128,28 +149,25 @@ async def send_to_groups_auto(clients: list):
                     success_count += 1
 
                 except ChatWriteForbiddenError:
-                    logger.warning(f"⚠️ [{idx}/{total_groups}] {link} yozish taqiqlangan — bog‘langan kanal tekshirilmoqda...")
-                    if entity and await handle_linked_channel(client, entity, profile_id):
+                    logger.warning(f"⚠️ [{idx}/{total_groups}] {link} yozish taqiqlangan — kanalga a’zo bo‘lish kerak bo‘lishi mumkin.")
+                    joined = await try_join_linked_channel(client, entity, profile_id)
+                    if joined:
                         try:
                             msg = await client.send_message(entity, message_text)
-                            logger.info(f"🔁 {link} qayta yuborildi (msg_id={msg.id})")
+                            logger.info(f"🔁 {link} — kanalga a’zo bo‘lgach xabar yuborildi (msg_id={msg.id})")
                             success_count += 1
                         except Exception as e:
                             logger.error(f"❌ {link} qayta yuborishda xato: {e}")
                             fail_count += 1
-                    elif entity:
-                        await leave_group(client, entity.id, profile_id, link)
-                        fail_count += 1
                     else:
-                        logger.warning(f"❗ {link} uchun entity aniqlanmagan, tashlab o‘tilmoqda.")
+                        logger.warning(f"🚪 {link} — kanalga qo‘shila olmadim, guruhdan chiqiladi.")
+                        await leave_group(client, entity.id, profile_id, link)
                         fail_count += 1
 
                 except (ChannelPrivateError, UserBannedInChannelError):
                     if entity:
                         logger.warning(f"🚫 [{idx}/{total_groups}] {link} — Maxfiy kanal yoki ban.")
                         await leave_group(client, entity.id, profile_id, link)
-                    else:
-                        logger.warning(f"🚫 [{idx}/{total_groups}] {link} — Maxfiy yoki mavjud emas (entity yo‘q).")
                     fail_count += 1
 
                 except FloodWaitError as e:
@@ -161,8 +179,6 @@ async def send_to_groups_auto(clients: list):
                     logger.error(f"❌ [{idx}/{total_groups}] {link} - umumiy xato: {e}")
                     if entity:
                         await leave_group(client, entity.id, profile_id, link)
-                    else:
-                        logger.warning(f"❗ {link} uchun entity yo‘q, leave_group o‘tkazib yuborildi.")
                     fail_count += 1
 
                 await asyncio.sleep(60 / messages_per_minute)
