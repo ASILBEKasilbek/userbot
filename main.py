@@ -3,10 +3,10 @@ import logging
 from aiogram import Bot
 from db import init_db, load_profiles
 from aiogram_handlers import dp, clients
-from telethon_utils import send_to_groups_auto, auto_reply_handler, response_reply_handler
+from telethon_utils1 import send_to_groups_auto, auto_reply_handler, response_reply_handler
 from telethon import TelegramClient, events
 from config import BOT_TOKEN
-from telethon_utils import load_existing_groups
+from telethon_utils1 import load_existing_groups
 from aiogram import types
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

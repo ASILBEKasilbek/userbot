@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Optimal sozlamalar
-BATCH_SIZE = 15          # Har batchdagi guruhlar soni
+BATCH_SIZE = 10          # Har batchdagi guruhlar soni
 DELAY_BETWEEN_MSG = (2, 4)  # Xabar orasidagi random kutish (sekundlarda)
 PAUSE_BETWEEN_BATCH = 60     # Batchdan keyin tanaffus (sekundlarda)
 GLOBAL_SLEEP = 300           # Barcha profillar bir siklni tugatgandan keyin kutish (sekundlarda)
@@ -176,7 +176,6 @@ async def send_profile_messages(client: TelegramClient):
     for i in range(0, total_groups, BATCH_SIZE):
         batch = groups[i:i + BATCH_SIZE]
         logger.info(f"📦 Partiya: {i//BATCH_SIZE + 1} | {len(batch)} ta guruh yuboriladi...")
-
         for j, link in enumerate(batch, start=i + 1):
             await send_message_safe(client, link, message_text, profile_id, j, total_groups)
             await asyncio.sleep(random.uniform(*DELAY_BETWEEN_MSG))
