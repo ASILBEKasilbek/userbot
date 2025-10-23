@@ -92,6 +92,27 @@ def save_group(link, profile_id):
         logger.error(f"Guruh saqlashda xato: {e}")
     finally:
         conn.close()
+def remove_duplicate_groups():
+    try:
+        conn = sqlite3.connect('userbot_settings.db')
+        c = conn.cursor()
+
+        # Dublikatlarni aniqlash va eski ID larni o‘chirish
+        c.execute('''
+            DELETE FROM groups
+            WHERE id NOT IN (
+                SELECT MIN(id)
+                FROM groups
+                GROUP BY link, profile_id
+            )
+        ''')
+        deleted = conn.total_changes
+        conn.commit()
+        logger.info(f"🧹 Dublikat guruhlar o‘chirildi: {deleted} ta yozuv.")
+    except Exception as e:
+        logger.error(f"Dublikatlarni o‘chirishda xato: {e}")
+    finally:
+        conn.close()
 
 def remove_group(link, profile_id):
     try:

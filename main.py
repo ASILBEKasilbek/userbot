@@ -26,6 +26,9 @@ async def set_default_commands(bot: Bot):
 async def main():
     """Botni ishga tushirish va profillarni yuklash."""
     await set_default_commands(bot)
+    from db import remove_duplicate_groups
+
+    remove_duplicate_groups()
 
     profiles = load_profiles()
     for prof in profiles:
