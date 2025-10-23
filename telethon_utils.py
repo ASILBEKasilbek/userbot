@@ -11,15 +11,17 @@ from telethon.errors import (
 from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest, GetFullChannelRequest
 from telethon.tl.types import Channel
 from db import load_groups, save_group, remove_group, get_profile_setting
+from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Optimal sozlamalar
-BATCH_SIZE = 10         # Har batchdagi guruhlar soni
+BATCH_SIZE = 4         # Har batchdagi guruhlar soni
 DELAY_BETWEEN_MSG = (5, 10)  # Xabar orasidagi random kutish (sekundlarda)
 PAUSE_BETWEEN_BATCH = 60     # Batchdan keyin tanaffus (sekundlarda)
 GLOBAL_SLEEP = 300           # Barcha profillar bir siklni tugatgandan keyin kutish (sekundlarda)
+FLOOD_BLOCKED = {} 
 
 async def auto_reply_handler(event):
     """Shaxsiy xabarlarga avtomatik javob berish."""
@@ -134,76 +136,66 @@ async def load_existing_groups(client: TelegramClient, profile_id: int):
         logger.error(f"❌ {client._self_id} mavjud guruhlarni yuklashda xato: {e}")
 
 async def send_message_safe(client: TelegramClient, link: str, message_text: str, profile_id: int, idx: int, total: int) -> bool:
-    """Xavfsiz xabar yuborish, ban yoki taqiqlardan chiqish."""
+    """FloodWait bo‘lsa, profilni vaqtincha bloklab, keyingi profillarni davom ettiradi."""
     try:
         entity = await client.get_entity(link)
         await client.send_message(entity, message_text)
         logger.info(f"✅ [{idx}/{total}] Yuborildi: {link}")
         return True
+
     except FloodWaitError as e:
-        logger.warning(f"⏳ FloodWait {e.seconds}s: {link}")
-        await asyncio.sleep(e.seconds + 1)
-        return await send_message_safe(client, link, message_text, profile_id, idx, total)  # Qayta urinish
-    except ChatWriteForbiddenError as e:
-        logger.warning(f"🚫 Yozish taqiqlangan: {link}. Bog'langan kanalga qo'shilish urinilmoqda...")
-        if await try_join_linked_channel(client, entity, profile_id):
-            return await send_message_safe(client, link, message_text, profile_id, idx, total)  # Qayta urinish
-        else:
-            logger.error(f"❌ Kanalga qo'shila olmadi, guruhdan chiqilmoqda: {link}")
-            await leave_group(client, entity.id, profile_id, link)
-            return False
-    except UserBannedInChannelError as e:
-        logger.error(f"🚫 Foydalanuvchi band qilingan: {link}. Guruhdan chiqarilmoqda...")
-        await leave_group(client, entity.id, profile_id, link)
+        unblock_time = datetime.now() + timedelta(seconds=e.seconds + 5)
+        FLOOD_BLOCKED[profile_id] = unblock_time
+        logger.warning(f"🚫 FloodWait {e.seconds}s ({client._self_id}) — profil bloklandi do {unblock_time.strftime('%H:%M:%S')}")
+        return False  # Keyingisiga o‘tamiz
+
+    except ChatWriteForbiddenError:
+        logger.warning(f"🚫 Yozish taqiqlangan: {link}")
         return False
-    except ChannelPrivateError as e:
-        logger.error(f"🔒 Shaxsiy kanal: {link}. Guruhdan o'chirilmoqda...")
+    except (UserBannedInChannelError, ChannelPrivateError):
+        logger.warning(f"🚫 Guruhdan o‘chirilmoqda: {link}")
         remove_group(link, profile_id)
         return False
     except Exception as e:
-        logger.error(f"❌ [{idx}] {link} - Xato: {e}")
-        error_text = str(e).lower()
-
-        # Agar guruh o‘chgan, private yoki topilmasa — o‘chirish
-        if any(k in error_text for k in ["banned", "forbidden", "private", "cannot find any entity"]):
-            logger.warning(f"🚫 Guruh mavjud emas yoki yopilgan: {link}. Bazadan o‘chirilmoqda...")
-            try:
-                # leave_group emas, faqat remove_group chaqiramiz
-                remove_group(link, profile_id)
-            except Exception as err:
-                logger.error(f"❌ Guruhni bazadan o‘chirishda xato: {err}")
+        logger.error(f"❌ [{idx}] {link} - {e}")
         return False
 
-
-
 async def send_profile_messages(client: TelegramClient):
-    """Bitta profil uchun guruhlarga xabar yuborish."""
+    """Bitta profil uchun xabar yuborish, agar Flood bo‘lsa o‘tkazib yuboriladi."""
     profile_id = client.profile_id
+
+    # Agar Flood bloklangan bo‘lsa, o‘tkazib yuborish
+    if profile_id in FLOOD_BLOCKED:
+        if datetime.now() < FLOOD_BLOCKED[profile_id]:
+            remaining = (FLOOD_BLOCKED[profile_id] - datetime.now()).seconds
+            logger.info(f"⏸️ {client._self_id} Flood kutmoqda ({remaining}s qoldi)...")
+            return
+        else:
+            del FLOOD_BLOCKED[profile_id]
+            logger.info(f"✅ {client._self_id} Flood tugadi, davom etmoqda.")
+
+    # Agar avto send o‘chirilgan bo‘lsa
     if not bool(int(get_profile_setting(profile_id, "auto_send_enabled") or 0)):
-        logger.info(f"⏸️ {client._self_id} uchun avto yuborish o'chirilgan.")
+        logger.info(f"⏸️ {client._self_id} uchun avto yuborish o‘chirilgan.")
         return
 
     message_text = get_profile_setting(profile_id, "message_text") or "📢 Avto xabar!"
     groups = load_groups(profile_id)
     total_groups = len(groups)
+
     if not groups:
         logger.info(f"📂 {client._self_id} uchun guruhlar topilmadi.")
         return
 
     logger.info(f"🚀 {client._self_id} uchun {total_groups} ta guruhga yuborish boshlandi.")
 
-    for i in range(0, total_groups, BATCH_SIZE):
-        batch = groups[i:i + BATCH_SIZE]
-        logger.info(f"📦 Partiya: {i//BATCH_SIZE + 1} | {len(batch)} ta guruh yuboriladi...")
-        for j, link in enumerate(batch, start=i + 1):
-            await send_message_safe(client, link, message_text, profile_id, j, total_groups)
-            await asyncio.sleep(random.uniform(*DELAY_BETWEEN_MSG))
+    for i, link in enumerate(groups, start=1):
+        ok = await send_message_safe(client, link, message_text, profile_id, i, total_groups)
+        await asyncio.sleep(random.uniform(*DELAY_BETWEEN_MSG))
+        if not ok and profile_id in FLOOD_BLOCKED:
+            break  # Flood bo‘lsa, to‘xtatamiz
 
-        if i + BATCH_SIZE < total_groups:  # Oxirgi batchdan keyin pause qilmaslik
-            logger.info(f"😴 {PAUSE_BETWEEN_BATCH}s tanaffus (keyingi batch)...")
-            await asyncio.sleep(PAUSE_BETWEEN_BATCH)
-
-    logger.info(f"✅ {client._self_id} uchun barcha guruhlar yuborildi.")
+    logger.info(f"✅ {client._self_id} uchun yuborish yakunlandi.")
 
 async def send_to_groups_auto(clients: list):
     """Barcha profillar parallel ravishda guruhlarga xabar yuborish."""
