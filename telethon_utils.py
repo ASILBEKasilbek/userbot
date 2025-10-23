@@ -158,10 +158,12 @@ async def send_message_safe(client: TelegramClient, link: str, message_text: str
         if any(k in error_text for k in ["banned", "forbidden", "private", "cannot find any entity"]):
             logger.warning(f"🚫 Guruh mavjud emas yoki yopilgan: {link}. Bazadan o‘chirilmoqda...")
             try:
-                await leave_group(client, entity.id if 'entity' in locals() else 0, profile_id, link)
-            except Exception:
+                # leave_group emas, faqat remove_group chaqiramiz
                 remove_group(link, profile_id)
+            except Exception as err:
+                logger.error(f"❌ Guruhni bazadan o‘chirishda xato: {err}")
         return False
+
 
 
 async def send_profile_messages(client: TelegramClient):
