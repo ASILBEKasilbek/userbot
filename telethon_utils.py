@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Optimal sozlamalar
-BATCH_SIZE = 10          # Har batchdagi guruhlar soni
+BATCH_SIZE = 5         # Har batchdagi guruhlar soni
 DELAY_BETWEEN_MSG = (2, 4)  # Xabar orasidagi random kutish (sekundlarda)
 PAUSE_BETWEEN_BATCH = 60     # Batchdan keyin tanaffus (sekundlarda)
 GLOBAL_SLEEP = 300           # Barcha profillar bir siklni tugatgandan keyin kutish (sekundlarda)
