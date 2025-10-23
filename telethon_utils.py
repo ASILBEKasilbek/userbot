@@ -84,6 +84,10 @@ async def try_join_linked_channel(client: TelegramClient, entity, profile_id: in
             if linked_chat_id:
                 try:
                     linked_channel = await client.get_entity(linked_chat_id)
+
+                    # 🔽 LOOPning oldini olish uchun bu qatorni qo‘shamiz
+                    client._event_builders.clear()
+
                     await client(JoinChannelRequest(linked_channel))
                     save_group(f"https://t.me/c/{linked_chat_id}", profile_id)
                     logger.info(f"📡 {client._self_id} kanalga avtomatik qo‘shildi: {linked_channel.title}")
@@ -96,6 +100,7 @@ async def try_join_linked_channel(client: TelegramClient, entity, profile_id: in
             invite_link = getattr(full.full_chat, "exported_invite", None)
             if invite_link and hasattr(invite_link, "link"):
                 try:
+                    client._event_builders.clear()  # 🔽 Bu yerda ham
                     await client(JoinChannelRequest(invite_link.link))
                     save_group(invite_link.link, profile_id)
                     logger.info(f"📡 {client._self_id} havola orqali kanalga qo‘shildi: {invite_link.link}")
