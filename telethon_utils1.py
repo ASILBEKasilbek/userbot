@@ -134,7 +134,7 @@ logger = logging.getLogger(__name__)
 # GLOBAL_SLEEP = 300  # barcha profillar uchun aylanib bo‘lgach 5 daqiqa dam
 BATCH_SIZE = 5
 DELAY_BETWEEN_MSG = (5, 10)
-PAUSE_BETWEEN_BATCH = 120
+PAUSE_BETWEEN_BATCH = 60
 GLOBAL_SLEEP = 300
 
 async def send_message_safe(client, link, message_text, profile_id, idx, total_groups):

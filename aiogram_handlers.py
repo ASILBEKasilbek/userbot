@@ -9,12 +9,12 @@ from telethon.tl.functions.auth import SendCodeRequest
 from config import ADMIN_ID
 from db import load_profiles, save_profile, remove_profile, load_groups, get_profile_setting, update_profile_setting
 from states import SettingsForm, ProfileForm, MainForm
-from telethon_utils1 import auto_reply_handler, response_reply_handler, load_existing_groups
+from telethon_utils import auto_reply_handler, response_reply_handler, load_existing_groups
 from constants import MESSAGES, MAIN_MENU_BUTTONS, PROFILE_MENU_BUTTONS, DELETE_CONFIRM_BUTTONS
 from keyboards import get_main_keyboard, get_profile_keyboard, get_profile_selection_keyboard, get_delete_confirm_keyboard
 from telethon.errors import SessionPasswordNeededError, PhoneNumberInvalidError, ApiIdInvalidError
 from telethon import events
-from telethon_utils1 import load_existing_groups
+from telethon_utils import load_existing_groups
 from db import save_profile, remove_profile,save_group
 from telethon.tl.functions.channels import JoinChannelRequest
 
