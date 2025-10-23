@@ -75,32 +75,37 @@ async def leave_group(client: TelegramClient, group_id: int, profile_id: int, li
 
 async def try_join_linked_channel(client: TelegramClient, entity, profile_id: int) -> bool:
     """Agar yozish uchun kanalga obuna bo‘lish kerak bo‘lsa, avtomatik kanalga qo‘shiladi."""
+    from db import load_groups  # ichkarida chaqiramiz, aylanish oldini olish uchun
+    existing_groups = load_groups(profile_id)
+
     try:
         if isinstance(entity, Channel):
             full = await client(GetFullChannelRequest(entity))
-
-            # Guruh bilan bog‘langan kanalni tekshirish
             linked_chat_id = getattr(full.full_chat, "linked_chat_id", None)
+
             if linked_chat_id:
+                link = f"https://t.me/c/{linked_chat_id}"
+                if link in existing_groups:
+                    logger.warning(f"⚠️ {client._self_id} kanal allaqachon bazada bor: {link}, qayta qo‘shilmaydi.")
+                    return False
+
                 try:
                     linked_channel = await client.get_entity(linked_chat_id)
-
-                    # 🔽 LOOPning oldini olish uchun bu qatorni qo‘shamiz
-                    client._event_builders.clear()
-
                     await client(JoinChannelRequest(linked_channel))
-                    save_group(f"https://t.me/c/{linked_chat_id}", profile_id)
+                    save_group(link, profile_id)
                     logger.info(f"📡 {client._self_id} kanalga avtomatik qo‘shildi: {linked_channel.title}")
                     return True
                 except Exception as e:
                     logger.warning(f"❌ Kanalga qo‘shila olmadi: {e}")
                     return False
 
-            # Agar linked_chat_id topilmasa, kanal havolasini olishga urinadi
+            # Agar linked_chat_id topilmasa, invite link orqali urinish
             invite_link = getattr(full.full_chat, "exported_invite", None)
             if invite_link and hasattr(invite_link, "link"):
+                if invite_link.link in existing_groups:
+                    logger.warning(f"⚠️ {client._self_id} kanal allaqachon bazada bor: {invite_link.link}")
+                    return False
                 try:
-                    client._event_builders.clear()  # 🔽 Bu yerda ham
                     await client(JoinChannelRequest(invite_link.link))
                     save_group(invite_link.link, profile_id)
                     logger.info(f"📡 {client._self_id} havola orqali kanalga qo‘shildi: {invite_link.link}")
