@@ -152,10 +152,17 @@ async def send_message_safe(client: TelegramClient, link: str, message_text: str
         return False
     except Exception as e:
         logger.error(f"❌ [{idx}] {link} - Xato: {e}")
-        if "banned" in str(e).lower() or "forbidden" in str(e).lower():
-            logger.warning(f"🚫 Potensial ban/forbidden xato: {link}. Guruhdan chiqilmoqda...")
-            await leave_group(client, entity.id, profile_id, link)
+        error_text = str(e).lower()
+
+        # Agar guruh o‘chgan, private yoki topilmasa — o‘chirish
+        if any(k in error_text for k in ["banned", "forbidden", "private", "cannot find any entity"]):
+            logger.warning(f"🚫 Guruh mavjud emas yoki yopilgan: {link}. Bazadan o‘chirilmoqda...")
+            try:
+                await leave_group(client, entity.id if 'entity' in locals() else 0, profile_id, link)
+            except Exception:
+                remove_group(link, profile_id)
         return False
+
 
 async def send_profile_messages(client: TelegramClient):
     """Bitta profil uchun guruhlarga xabar yuborish."""
