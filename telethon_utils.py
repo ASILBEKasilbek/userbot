@@ -16,11 +16,11 @@ from datetime import datetime, timedelta
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Optimal sozlamalar
-BATCH_SIZE = 4         # Har batchdagi guruhlar soni
-DELAY_BETWEEN_MSG = (5, 10)  # Xabar orasidagi random kutish (sekundlarda)
-PAUSE_BETWEEN_BATCH = 60     # Batchdan keyin tanaffus (sekundlarda)
-GLOBAL_SLEEP = 300           # Barcha profillar bir siklni tugatgandan keyin kutish (sekundlarda)
+ 
+BATCH_SIZE = 4    
+DELAY_BETWEEN_MSG = (5, 10)  
+PAUSE_BETWEEN_BATCH = 60     
+GLOBAL_SLEEP = 300           
 FLOOD_BLOCKED = {} 
 
 async def auto_reply_handler(event):
