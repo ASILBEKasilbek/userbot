@@ -17,11 +17,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
  
-BATCH_SIZE = 4    
-DELAY_BETWEEN_MSG = (5, 10)  
-PAUSE_BETWEEN_BATCH = 60     
-GLOBAL_SLEEP = 300           
-FLOOD_BLOCKED = {} 
+# BATCH_SIZE = 4    
+# DELAY_BETWEEN_MSG = (5, 10)  
+# PAUSE_BETWEEN_BATCH = 60     
+# GLOBAL_SLEEP = 300           
+# FLOOD_BLOCKED = {} 
 
 async def auto_reply_handler(event):
     """Shaxsiy xabarlarga avtomatik javob berish."""
@@ -134,37 +134,111 @@ async def load_existing_groups(client: TelegramClient, profile_id: int):
                     logger.error(f"❌ Guruh linkini olishda xato: {e}")
     except Exception as e:
         logger.error(f"❌ {client._self_id} mavjud guruhlarni yuklashda xato: {e}")
+# --- Qo'shimcha importlar ---
+import math
+from collections import defaultdict
+# ------------------------------------------------
+
+# Tunable parametrlar (defaultlarni o'zgartiring)
+DELAY_BETWEEN_MSG = (8, 18)      # har xabar orasidagi random sekundlar (biroz kattaroq)
+BATCH_SIZE = 4
+PAUSE_BETWEEN_BATCH = 180        # har batch dan keyin tanaffus (sekund)
+GLOBAL_SLEEP = 900               # barcha profillar aylanmasi (sekund)
+MESSAGES_PER_MINUTE = 6          # xavfsiz minimal limit (profil holatiga qarab kamaytiring)
+
+# Cache va profiling state
+_entity_cache = {}               # link -> entity obyekti
+_profile_send_history = defaultdict(list)  # profile_id -> list of send timestamps (datetime)
+_profile_backoff = {}            # profile_id -> seconds to wait (adaptive backoff)
+
+# Helper: entity cache olish
+async def get_entity_cached(client: TelegramClient, link: str):
+    key = f"{client._self_id}:{link}"
+    if key in _entity_cache:
+        return _entity_cache[key]
+    entity = await client.get_entity(link)
+    _entity_cache[key] = entity
+    return entity
+
+# Helper: xabarni ozgina variatsiya qilish
+def make_variation(message_text: str) -> str:
+    # kichik random id va emoji qo'shish — aynan bir xil matn yuborilmasligi uchun
+    suffix = f" · id{random.randint(1000,9999)}"
+    # ba'zida emoji qo'shamiz, ba'zida belgi
+    extras = ["", " ✅", " ✨", " 🔔", " 📌"]
+    return f"{message_text}{random.choice(extras)}{suffix}"
+
+# Helper: messages_per_minute limitni tekshirish
+def can_send_now(profile_id: int) -> bool:
+    now = datetime.now()
+    window_start = now - timedelta(minutes=1)
+    # filter eski timestamplarni olib tashlash
+    _profile_send_history[profile_id] = [t for t in _profile_send_history[profile_id] if t > window_start]
+    return len(_profile_send_history[profile_id]) < MESSAGES_PER_MINUTE
+
+# Yaxshilangan send_message_safe
+
+
 
 async def send_message_safe(client: TelegramClient, link: str, message_text: str, profile_id: int, idx: int, total: int) -> bool:
-    """FloodWait bo‘lsa, profilni vaqtincha bloklab, keyingi profillarni davom ettiradi."""
+    """Adaptive flood himoya bilan yuborish."""
     try:
-        entity = await client.get_entity(link)
-        await client.send_message(entity, message_text)
+        # Agar profilga backoff qo'yilgan bo'lsa — tekshirib o'tamiz
+        if profile_id in _profile_backoff:
+            unblock_time = _profile_backoff[profile_id]
+            if datetime.now() < unblock_time:
+                remaining = (unblock_time - datetime.now()).seconds
+                logger.info(f"⏸️ Profil {profile_id} blocklangan, {remaining}s qoldi: {link}")
+                return False
+            else:
+                del _profile_backoff[profile_id]
+
+        # messages_per_minute tekshiruvi
+        if not can_send_now(profile_id):
+            # Agar bu limitdan oshib ketgan bo'lsa — profilni qisqa backoffga qo'yamiz
+            backoff = timedelta(seconds=60 + random.randint(20, 60))
+            _profile_backoff[profile_id] = datetime.now() + backoff
+            logger.warning(f"🚫 {client._self_id} uchun rate limit (messages_per_minute) bosildi. {backoff.seconds}s block.")
+            return False
+
+        # entity ni cache orqali oling
+        entity = await get_entity_cached(client, link)
+        # Send with slight variation
+        final_text = make_variation(message_text)
+        await client.send_message(entity, final_text)
+        # record timestamp for rate limiting
+        _profile_send_history[profile_id].append(datetime.now())
+
         logger.info(f"✅ [{idx}/{total}] Yuborildi: {link}")
         return True
 
     except FloodWaitError as e:
+        # Telegram aytgan seconds ga mos holda profilni block qilamiz
         unblock_time = datetime.now() + timedelta(seconds=e.seconds + 5)
-        FLOOD_BLOCKED[profile_id] = unblock_time
-        logger.warning(f"🚫 FloodWait {e.seconds}s ({client._self_id}) — profil bloklandi do {unblock_time.strftime('%H:%M:%S')}")
-        return False  # Keyingisiga o‘tamiz
+        _profile_backoff[profile_id] = unblock_time
+        # logging uchun adaptive profiling
+        logger.warning(f"🚨 FLOOD ({client._self_id}) - wait {e.seconds}s => profil blocklandi until {unblock_time}")
+        return False
 
     except ChatWriteForbiddenError:
         logger.warning(f"🚫 Yozish taqiqlangan: {link}")
         return False
     except (UserBannedInChannelError, ChannelPrivateError):
-        logger.warning(f"🚫 Guruhdan o‘chirilmoqda: {link}")
+        logger.warning(f"🚫 Guruhdan o‘chirilmoqda yoki private: {link}")
         remove_group(link, profile_id)
+        # clear cache for this link
+        key = f"{client._self_id}:{link}"
+        _entity_cache.pop(key, None)
         return False
     except Exception as e:
         logger.error(f"❌ [{idx}] {link} - {e}")
         return False
 
+# Yaxshilangan send_profile_messages (batch + pausa + tekshiruvlar)
 async def send_profile_messages(client: TelegramClient):
-    """Bitta profil uchun xabar yuborish, agar Flood bo‘lsa o‘tkazib yuboriladi."""
     profile_id = client.profile_id
 
-    # Agar Flood bloklangan bo‘lsa, o‘tkazib yuborish
+    # FLOOD_BLOCKED (sizning mavjud) bilan ham moslash
     if profile_id in FLOOD_BLOCKED:
         if datetime.now() < FLOOD_BLOCKED[profile_id]:
             remaining = (FLOOD_BLOCKED[profile_id] - datetime.now()).seconds
@@ -172,9 +246,7 @@ async def send_profile_messages(client: TelegramClient):
             return
         else:
             del FLOOD_BLOCKED[profile_id]
-            logger.info(f"✅ {client._self_id} Flood tugadi, davom etmoqda.")
 
-    # Agar avto send o‘chirilgan bo‘lsa
     if not bool(int(get_profile_setting(profile_id, "auto_send_enabled") or 0)):
         logger.info(f"⏸️ {client._self_id} uchun avto yuborish o‘chirilgan.")
         return
@@ -190,14 +262,62 @@ async def send_profile_messages(client: TelegramClient):
     logger.info(f"🚀 {client._self_id} uchun {total_groups} ta guruhga yuborish boshlandi.")
 
     for i, link in enumerate(groups, start=1):
+        # Agar profilda adaptive backoff bo'lsa, chiqarib ketamiz
+        if profile_id in _profile_backoff and datetime.now() < _profile_backoff[profile_id]:
+            logger.info(f"⏸️ {_profile_backoff[profile_id]}gacha profil blocklandi, to'xtatildi.")
+            break
+
         ok = await send_message_safe(client, link, message_text, profile_id, i, total_groups)
+
+        # agar yuborilgan bo'lsa yoki yo'q bo'lsa ham, small delay lekin adaptiv
+        # agar muvaffaqiyatsiz va profil block bo'lsa, to'xtatamiz
         await asyncio.sleep(random.uniform(*DELAY_BETWEEN_MSG))
-        if not ok and profile_id in FLOOD_BLOCKED:
-            break  # Flood bo‘lsa, to‘xtatamiz
+
+        if not ok:
+            # Agar profil adaptive backoff o'rnatilgan bo'lsa — chiqamiz
+            if profile_id in _profile_backoff:
+                logger.info(f"⚠️ {client._self_id} flood/limit tufayli to'xtatildi.")
+                break
+
+        # Batch pauza qo'llash
+        if i % BATCH_SIZE == 0 and i != total_groups:
+            pause = PAUSE_BETWEEN_BATCH + random.randint(0, 40)
+            logger.info(f"🛌 Batch tugadi ({i}/{total_groups}). Pauza {pause}s...")
+            await asyncio.sleep(pause)
 
     logger.info(f"✅ {client._self_id} uchun yuborish yakunlandi.")
 
+# Yaxshilangan send_to_groups_auto: profiling va staggered profiling
 async def send_to_groups_auto(clients: list):
+    """Barcha profillar parallel ravishda guruhlarga xabar yuborish.
+       Qo'shimcha: profilni stagger (boshqa profilga birma-bir) tarzda boshlash."""
+    # boshida har bir profilda kichik staggers qo'yamiz
+    for idx, c in enumerate(clients):
+        await asyncio.sleep(random.uniform(1, 3))  # kichik stagger
+
+    while True:
+        try:
+            # Staggered start: har bir profilni alohida kechiktirish bilan ishga tushurish mumkin
+            tasks = []
+            for client in clients:
+                # agar profil bloklangan bo'lsa, boshqasiga o'tish
+                pid = client.profile_id
+                if pid in _profile_backoff and datetime.now() < _profile_backoff[pid]:
+                    logger.info(f"⏭️ {client._self_id} blocklangan, o'tkazildi.")
+                    continue
+                tasks.append(send_profile_messages(client))
+
+            if tasks:
+                await asyncio.gather(*tasks)
+
+            logger.info(f"🌙 Barcha profillar aylanib chiqdi. {GLOBAL_SLEEP}s kutish...")
+            await asyncio.sleep(GLOBAL_SLEEP + random.randint(0, 120))
+        except Exception as e:
+            logger.error(f"🔥 Asosiy siklda xato: {e}")
+            wait_time = random.randint(20, 60)
+            logger.info(f"♻️ {wait_time}s keyin qayta uriniladi...")
+            await asyncio.sleep(wait_time)
+
     """Barcha profillar parallel ravishda guruhlarga xabar yuborish."""
     while True:
         try:
