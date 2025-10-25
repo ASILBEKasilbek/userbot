@@ -12,7 +12,7 @@ from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelReque
 from telethon.tl.types import Channel
 from db import load_groups, save_group, remove_group, get_profile_setting
 from datetime import datetime, timedelta
-
+from collections import defaultdict
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -134,10 +134,7 @@ async def load_existing_groups(client: TelegramClient, profile_id: int):
                     logger.error(f"❌ Guruh linkini olishda xato: {e}")
     except Exception as e:
         logger.error(f"❌ {client._self_id} mavjud guruhlarni yuklashda xato: {e}")
-# --- Qo'shimcha importlar ---
-import math
-from collections import defaultdict
-# ------------------------------------------------
+
 
 # Tunable parametrlar (defaultlarni o'zgartiring)
 DELAY_BETWEEN_MSG = (8, 18)      # har xabar orasidagi random sekundlar (biroz kattaroq)
@@ -145,7 +142,7 @@ BATCH_SIZE = 4
 PAUSE_BETWEEN_BATCH = 180        # har batch dan keyin tanaffus (sekund)
 GLOBAL_SLEEP = 900               # barcha profillar aylanmasi (sekund)
 MESSAGES_PER_MINUTE = 6          # xavfsiz minimal limit (profil holatiga qarab kamaytiring)
-
+FLOOD_BLOCKED = {}              # profile_id -> unblock datetime
 # Cache va profiling state
 _entity_cache = {}               # link -> entity obyekti
 _profile_send_history = defaultdict(list)  # profile_id -> list of send timestamps (datetime)

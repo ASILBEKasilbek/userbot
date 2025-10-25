@@ -4,9 +4,15 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+DB_NAME = 'userbot_settings.db'
+
+def get_connection():
+    # 🔧 Muhim o‘zgarish: timeout va check_same_thread qo‘shildi
+    return sqlite3.connect(DB_NAME, timeout=10, check_same_thread=False)
+
 def init_db():
     try:
-        conn = sqlite3.connect('userbot_settings.db')
+        conn = get_connection()
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,7 +44,7 @@ def init_db():
 
 def save_profile(api_id, api_hash, phone, session_name):
     try:
-        conn = sqlite3.connect('userbot_settings.db')
+        conn = get_connection()
         c = conn.cursor()
         c.execute("INSERT INTO profiles (api_id, api_hash, phone, session_name) VALUES (?, ?, ?, ?)",
                   (api_id, api_hash, phone, session_name))
@@ -54,7 +60,7 @@ def save_profile(api_id, api_hash, phone, session_name):
 
 def remove_profile(profile_id):
     try:
-        conn = sqlite3.connect('userbot_settings.db')
+        conn = get_connection()
         c = conn.cursor()
         c.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
         c.execute("DELETE FROM groups WHERE profile_id = ?", (profile_id,))
@@ -67,7 +73,7 @@ def remove_profile(profile_id):
 
 def load_profiles():
     try:
-        conn = sqlite3.connect('userbot_settings.db')
+        conn = get_connection()
         c = conn.cursor()
         c.execute("SELECT id, api_id, api_hash, phone, session_name, auto_reply_enabled, auto_reply_text, response_reply_enabled, response_reply_text, message_text, auto_send_enabled, messages_per_minute, send_interval FROM profiles")
         profiles = [{'id': row[0], 'api_id': row[1], 'api_hash': row[2], 'phone': row[3], 'session_name': row[4], 
@@ -83,7 +89,7 @@ def load_profiles():
 
 def save_group(link, profile_id):
     try:
-        conn = sqlite3.connect('userbot_settings.db')
+        conn = get_connection()
         c = conn.cursor()
         c.execute("INSERT OR IGNORE INTO groups (link, profile_id) VALUES (?, ?)", (link, profile_id))
         conn.commit()
@@ -92,12 +98,11 @@ def save_group(link, profile_id):
         logger.error(f"Guruh saqlashda xato: {e}")
     finally:
         conn.close()
+
 def remove_duplicate_groups():
     try:
-        conn = sqlite3.connect('userbot_settings.db')
+        conn = get_connection()
         c = conn.cursor()
-
-        # Dublikatlarni aniqlash va eski ID larni o‘chirish
         c.execute('''
             DELETE FROM groups
             WHERE id NOT IN (
@@ -116,7 +121,7 @@ def remove_duplicate_groups():
 
 def remove_group(link, profile_id):
     try:
-        conn = sqlite3.connect('userbot_settings.db')
+        conn = get_connection()
         c = conn.cursor()
         c.execute("DELETE FROM groups WHERE link = ? AND profile_id = ?", (link, profile_id))
         conn.commit()
@@ -128,7 +133,7 @@ def remove_group(link, profile_id):
 
 def load_groups(profile_id):
     try:
-        conn = sqlite3.connect('userbot_settings.db')
+        conn = get_connection()
         c = conn.cursor()
         c.execute("SELECT link FROM groups WHERE profile_id = ?", (profile_id,))
         groups = [row[0] for row in c.fetchall()]
@@ -141,7 +146,7 @@ def load_groups(profile_id):
 
 def update_profile_setting(profile_id, key, value):
     try:
-        conn = sqlite3.connect('userbot_settings.db')
+        conn = get_connection()
         c = conn.cursor()
         c.execute(f"UPDATE profiles SET {key} = ? WHERE id = ?", (value, profile_id))
         conn.commit()
@@ -153,7 +158,7 @@ def update_profile_setting(profile_id, key, value):
 
 def get_profile_setting(profile_id, key):
     try:
-        conn = sqlite3.connect('userbot_settings.db')
+        conn = get_connection()
         c = conn.cursor()
         c.execute(f"SELECT {key} FROM profiles WHERE id = ?", (profile_id,))
         result = c.fetchone()
