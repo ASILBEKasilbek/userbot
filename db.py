@@ -1,6 +1,8 @@
 import sqlite3
 import logging
+import threading
 
+_db_lock = threading.Lock() 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -89,11 +91,13 @@ def load_profiles():
 
 def save_group(link, profile_id):
     try:
-        conn = get_connection()
-        c = conn.cursor()
-        c.execute("INSERT OR IGNORE INTO groups (link, profile_id) VALUES (?, ?)", (link, profile_id))
-        conn.commit()
-        logger.info(f"Guruh saqlandi: {link}, Profil ID: {profile_id}")
+        with _db_lock:   # <-- lock ichida bajariladi
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("INSERT OR IGNORE INTO groups (link, profile_id) VALUES (?, ?)", (link, profile_id))
+            conn.commit()
+            logger.info(f"Guruh saqlandi: {link}, Profil ID: {profile_id}")
+            
     except Exception as e:
         logger.error(f"Guruh saqlashda xato: {e}")
     finally:
