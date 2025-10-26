@@ -137,9 +137,9 @@ async def load_existing_groups(client: TelegramClient, profile_id: int):
 
 
 # Tunable parametrlar (defaultlarni o'zgartiring)
-DELAY_BETWEEN_MSG = (8, 18)      # har xabar orasidagi random sekundlar (biroz kattaroq)
-BATCH_SIZE = 4
-PAUSE_BETWEEN_BATCH = 180        # har batch dan keyin tanaffus (sekund)
+DELAY_BETWEEN_MSG = (6, 12)      # har xabar orasidagi random sekundlar (biroz kattaroq)
+BATCH_SIZE = 6
+PAUSE_BETWEEN_BATCH = 200        # har batch dan keyin tanaffus (sekund)
 GLOBAL_SLEEP = 900               # barcha profillar aylanmasi (sekund)
 MESSAGES_PER_MINUTE = 6          # xavfsiz minimal limit (profil holatiga qarab kamaytiring)
 FLOOD_BLOCKED = {}              # profile_id -> unblock datetime
